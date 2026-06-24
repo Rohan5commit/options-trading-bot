@@ -1,0 +1,31 @@
+# Core dependencies
+alpaca-py>=0.21.0
+yfinance>=0.2.31
+pandas>=2.0.0
+numpy>=1.24.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+filelock>=3.12.0
+
+# Technical analysis
+ta>=0.10.2
+
+# LLM / ML (for Modal inference container)
+transformers>=4.36.0
+peft>=0.7.0
+bitsandbytes>=0.41.0
+accelerate>=0.25.0
+torch>=2.1.0
+
+# OVH AI Training SDK
+ovhai>=0.1.0
+
+# HuggingFace
+huggingface-hub>=0.20.0
+datasets>=2.16.0
+trl>=0.7.0
+sentencepiece
+protobuf
+
+# Modal (for inference deployment)
+modal>=0.57.0

@@ -1,0 +1,67 @@
+name: Weekly Retrain on OVH Cloud
+
+on:
+  schedule:
+    - cron: '0 3 * * 0'  # Every Sunday at 3:00 UTC
+  workflow_dispatch:
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ovhai
+
+      - name: Build training dataset
+        run: python finetune/build_dataset.py
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+
+      - name: Upload dataset to OVH Object Storage
+        run: |
+          # Upload training data to OVH Object Storage via S3-compatible API
+          aws s3 sync ./training_data s3://options-training-data/ \
+            --endpoint-url https://s3.${OVH_REGION}.cloud.ovh.net \
+            --region ${OVH_REGION}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.OVH_S3_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.OVH_S3_SECRET_KEY }}
+          OVH_REGION: GRA
+
+      - name: Submit OVH training job
+        run: python finetune/ovh_train.py
+        env:
+          OVH_TOKEN: ${{ secrets.OVH_TOKEN }}
+          OVH_REGION: GRA
+          OVH_TRAINING_GPU: a100-180
+          OVH_TRAINING_TIMEOUT: 6h
+          OVH_DOCKER_IMAGE: rohan5commit/options-trainer:latest
+          OVH_DATASET_CONTAINER: options-training-data
+          OVH_OUTPUT_CONTAINER: options-model-output
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          BASE_MODEL_NAME: meta-llama/Meta-Llama-3-8B-Instruct
+
+      - name: Pull trained adapter to HuggingFace
+        run: |
+          # After training completes, pull the adapter from OVH and push to HF Hub
+          # This step assumes the OVH job has completed and the adapter is in the output container
+          echo "Training job submitted. Check OVH AI Training dashboard for completion."
+          echo "Once complete, download the adapter from the options-model-output container"
+          echo "and push to HuggingFace Hub: ${{ secrets.HF_MODEL_REPO }}"
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
