@@ -119,8 +119,8 @@ The bot uses a LoRA-adapted Llama-3-8B model trained on:
 - Financial news sentiment
 - IV history and realized volatility
 
-Training runs weekly on OVH Cloud A100 80GB (~$9/run).
-Inference runs daily on Modal L4 (~$0.01/run).
+Training runs once on OVH Cloud H100 (~$28 one-time).
+Inference runs daily on Modal L4 (~$0.30/month).
 
 ## Email Reports
 
