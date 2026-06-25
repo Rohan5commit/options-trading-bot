@@ -48,8 +48,8 @@ jobs:
         env:
           OVH_TOKEN: ${{ secrets.OVH_TOKEN }}
           OVH_REGION: GRA
-          OVH_TRAINING_GPU: t2-le-45
-          OVH_TRAINING_TIMEOUT: 56h
+          OVH_TRAINING_GPU: h100-380
+          OVH_TRAINING_TIMEOUT: 12h
           OVH_DOCKER_IMAGE: rohan5commit/options-trainer:latest
           OVH_DATASET_CONTAINER: options-training-data
           OVH_OUTPUT_CONTAINER: options-model-output

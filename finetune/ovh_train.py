@@ -15,10 +15,9 @@ logger = logging.getLogger(__name__)
 # ── OVH Configuration ─────────────────────────────────────────────────────────
 
 OVH_REGION = os.environ.get("OVH_REGION", "GRA")
-# V100S 32GB at $0.88/hr — cheapest that fits Llama-3-8B QLoRA
-# 100K examples × 10 epochs ≈ 50 hours ≈ $44 training cost
-OVH_GPU_FLAVOR = os.environ.get("OVH_TRAINING_GPU", "t2-le-45")
-OVH_TIMEOUT = os.environ.get("OVH_TRAINING_TIMEOUT", "56h")
+# H100 80GB at $3.50/hr — 100K examples × 10 epochs ≈ 8 hours ≈ $28
+OVH_GPU_FLAVOR = os.environ.get("OVH_TRAINING_GPU", "h100-380")
+OVH_TIMEOUT = os.environ.get("OVH_TRAINING_TIMEOUT", "12h")
 DOCKER_IMAGE = os.environ.get("OVH_DOCKER_IMAGE", "rohan5commit/options-trainer:latest")
 DATASET_CONTAINER = os.environ.get("OVH_DATASET_CONTAINER", "options-training-data")
 OUTPUT_CONTAINER = os.environ.get("OVH_OUTPUT_CONTAINER", "options-model-output")
