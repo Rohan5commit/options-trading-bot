@@ -1,7 +1,8 @@
 """
 LoRA fine-tuning script for Llama-3-8B-Instruct on options trading data.
 Uses QLoRA (4-bit quantization) for memory efficiency.
-Designed to run on OVH Cloud GPU (A100 80GB recommended).
+Designed to run on OVH Cloud V100S 32GB (t2-le-45) at $0.88/hr.
+Target: ~$30-50 training cost with 100K examples over 10 epochs.
 """
 import json
 import logging
@@ -46,16 +47,17 @@ TARGET_MODULES = [
 ]
 
 # Training hyperparameters
-NUM_EPOCHS = 3
+# 100K examples × 10 epochs on V100S ($0.88/hr) ≈ 50 hours ≈ $44
+NUM_EPOCHS = 10
 PER_DEVICE_BATCH_SIZE = 2
-GRADIENT_ACCUMULATION_STEPS = 8
+GRADIENT_ACCUMULATION_STEPS = 8  # effective batch = 16
 LEARNING_RATE = 2e-4
 WEIGHT_DECAY = 0.01
 WARMUP_RATIO = 0.1
 MAX_SEQ_LENGTH = 2048
-LOGGING_STEPS = 10
-SAVE_STEPS = 500
-EVAL_STEPS = 500
+LOGGING_STEPS = 50
+SAVE_STEPS = 1000
+EVAL_STEPS = 1000
 
 
 def load_and_format_dataset(path: str) -> list[dict[str, str]]:

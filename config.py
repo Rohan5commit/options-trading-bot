@@ -27,8 +27,9 @@ MODAL_INFERENCE_TIMEOUT: int = 120
 # ── OVH Cloud (training) ─────────────────────────────────────────────────────
 OVH_TOKEN: str = os.environ.get("OVH_TOKEN", "")
 OVH_REGION: str = "GRA"
-OVH_TRAINING_GPU: str = "a100-180"
-OVH_TRAINING_TIMEOUT: str = "6h"
+# V100S 32GB at $0.88/hr — 100K examples × 10 epochs ≈ 50 hours ≈ $44
+OVH_TRAINING_GPU: str = "t2-le-45"
+OVH_TRAINING_TIMEOUT: str = "56h"
 
 # ── HuggingFace ───────────────────────────────────────────────────────────────
 HF_TOKEN: str = os.environ.get("HF_TOKEN", "")
