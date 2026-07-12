@@ -1,12 +1,14 @@
 """
 LoRA fine-tuning script for Llama-3-8B-Instruct on options trading data.
 Uses QLoRA (4-bit quantization) for memory efficiency.
-Designed to run on Lightning.ai L4 GPU at $0.60/hr.
 
-Supports checkpointing for resuming training across Lightning.ai accounts:
+Two-phase training plan:
+- Phase 1: Lightning.ai L4 ($0.48/hr) — $15 budget = 31.25 hours
+- Phase 2: Modal A10G ($1.10/hr) — $30 budget = 27.3 hours
+
+Supports checkpointing for resuming across platforms:
 - Saves checkpoints to HF Hub every 1000 steps
-- Resumes from latest checkpoint on new account
-- Tracks cost metadata for budget management
+- Resumes from latest checkpoint on Modal
 """
 import json
 import logging
@@ -16,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 import torch
-from datasets import Dataset, load_dataset
+from datasets import Dataset
 from huggingface_hub import HfApi
 from peft import (
     LoraConfig,
@@ -43,8 +45,8 @@ TRAINING_DATA = os.environ.get("TRAINING_DATA", "./training_data/train.jsonl")
 EVAL_DATA = os.environ.get("EVAL_DATA", "./training_data/test.jsonl")
 
 # Cost tracking
-LIGHTNING_GPU_PRICE_PER_HR = float(os.environ.get("GPU_PRICE_HR", "0.71"))
-MAX_BUDGET = float(os.environ.get("MAX_BUDPUT", "45.0"))
+GPU_PRICE_PER_HR = float(os.environ.get("GPU_PRICE_HR", "0.48"))  # L4 on Lightning
+TRAINING_BUDGET = float(os.environ.get("TRAINING_BUDGET", "15.0"))  # Phase 1 budget
 
 # LoRA configuration
 LORA_R = 8
@@ -56,8 +58,11 @@ TARGET_MODULES = [
 ]
 
 # Training hyperparameters
-# 160K examples × 10 epochs on A10G ($0.71/hr) ≈ 56 hours ≈ $40
-NUM_EPOCHS = 10
+# 160K examples × 8 epochs on L4 ($0.48/hr) ≈ 67 hours ≈ $32
+# Phase 1 (Lightning): 31.25 hrs → ~3.75 epochs
+# Phase 2 (Modal): 27.3 hrs → ~4.25 epochs
+# Total: 8 epochs
+NUM_EPOCHS = 8
 PER_DEVICE_BATCH_SIZE = 2
 GRADIENT_ACCUMULATION_STEPS = 8  # effective batch = 16
 LEARNING_RATE = 2e-4
@@ -123,7 +128,7 @@ def find_latest_checkpoint(output_dir: str, hf_repo: str | None = None) -> str |
 
 
 def save_checkpoint_to_hub(output_dir: str, hf_repo: str, step: int, epoch: float, cost: float) -> None:
-    """Push checkpoint to HF Hub for persistence across accounts."""
+    """Push checkpoint to HF Hub for persistence across platforms."""
     if not HF_TOKEN:
         logger.warning("No HF_TOKEN, skipping Hub upload")
         return
@@ -147,7 +152,7 @@ def save_checkpoint_to_hub(output_dir: str, hf_repo: str, step: int, epoch: floa
             "last_step": step,
             "last_epoch": epoch,
             "total_cost_usd": cost,
-            "gpu_price_per_hr": LIGHTNING_GPU_PRICE_PER_HR,
+            "gpu_price_per_hr": GPU_PRICE_PER_HR,
             "timestamp": datetime.utcnow().isoformat(),
         }
         metadata_path = Path(output_dir) / "training_metadata.json"
@@ -274,27 +279,24 @@ def train():
     # Check for existing checkpoint
     resume_checkpoint = find_latest_checkpoint(OUTPUT_DIR, HF_REPO)
     resume_from = None
-    initial_epoch = 0
-    initial_step = 0
 
     if resume_checkpoint:
         if resume_checkpoint.startswith("hf://"):
-            # Download from HF Hub
             hf_repo_path = resume_checkpoint.replace("hf://", "")
             logger.info("Resuming from HF Hub checkpoint: %s", hf_repo_path)
-            # TODO: Download checkpoint from Hub to OUTPUT_DIR
         else:
             logger.info("Resuming from local checkpoint: %s", resume_checkpoint)
             resume_from = resume_checkpoint
 
-    logger.info("Starting training")
+    logger.info("Starting training on %s GPU at $%s/hr", 
+                os.environ.get("GPU_NAME", "unknown"), GPU_PRICE_PER_HR)
     start_time = datetime.utcnow()
 
     trainer.train(resume_from_checkpoint=resume_from)
 
     end_time = datetime.utcnow()
     duration_hours = (end_time - start_time).total_seconds() / 3600
-    cost = duration_hours * LIGHTNING_GPU_PRICE_PER_HR
+    cost = duration_hours * GPU_PRICE_PER_HR
 
     # Save the LoRA adapter
     logger.info("Saving LoRA adapter to %s", OUTPUT_DIR)
@@ -316,6 +318,8 @@ def train():
             "trained_at": datetime.utcnow().isoformat(),
             "duration_hours": round(duration_hours, 2),
             "estimated_cost_usd": round(cost, 2),
+            "gpu": os.environ.get("GPU_NAME", "unknown"),
+            "gpu_price_per_hr": GPU_PRICE_PER_HR,
         }, f, indent=2)
 
     # Push final adapter to HF Hub

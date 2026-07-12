@@ -1,6 +1,6 @@
 # Options Trading Bot
 
-LLM-driven autonomous US options trading bot using Alpaca Broker API (paper trading), Modal serverless GPU inference, and Lightning.ai for model training.
+LLM-driven autonomous US options trading bot using Alpaca Broker API (paper trading), Modal serverless GPU inference, and two-phase training on Lightning.ai + Modal.
 
 ## Architecture
 
@@ -13,10 +13,10 @@ GitHub Actions (Daily 9:35 ET)
     → executor.py           (place orders)
     → email_reporter.py     (send summary)
 
-Modal GPU (L4)              → Llama-3-8B + LoRA inference
-Lightning.ai (A10G)         → LoRA fine-tuning ($0.71/hr)
-Alpaca Paper Trading API    → Options chain, orders, positions
-yfinance + Polygon.io       → Price data, IV, news, earnings
+Modal GPU (A10G)             → Llama-3-8B + LoRA inference + Phase 2 training
+Lightning.ai (L4)            → Phase 1 training ($0.48/hr)
+Alpaca Paper Trading API     → Options chain, orders, positions
+yfinance + Polygon.io        → Price data, IV, news, earnings
 ```
 
 ## Setup
@@ -34,19 +34,40 @@ yfinance + Polygon.io       → Price data, IV, news, earnings
    modal deploy modal_inference.py
    ```
 
-### 3. Lightning.ai (Training)
+### 3. Training (Two-Phase)
+
+**Total budget: $45** ($15 Lightning + $30 Modal)
+
+#### Phase 1: Lightning.ai (L4 @ $0.48/hr)
 1. Create a free [Lightning.ai](https://lightning.ai) account
-2. Open a Studio with **A10G GPU** ($0.71/hr)
+2. Open a Studio with **L4 GPU** ($0.48/hr)
 3. In the Studio terminal:
    ```bash
    git clone https://github.com/Rohan5commit/options-trading-bot.git
    cd options-trading-bot
    export HF_TOKEN=your_hf_token
-   export HF_CHECKPOINT_REPO=Rohan5commit/options-llm-checkpoints
    bash finetune/run_lightning.sh
    ```
-4. Training auto-checkpoints to HuggingFace Hub every 1000 steps
-5. When budget runs out, open new Lightning.ai account and resume (checkpoints persist on Hub)
+4. Phase 1 uses $15 = 31.25 hours of training
+5. Checkpoints save to HuggingFace Hub every 1000 steps
+
+#### Phase 2: Modal (A10G @ $1.10/hr)
+1. After Phase 1 budget exhausted, sign up at [Modal](https://modal.com/)
+2. Install and authenticate:
+   ```bash
+   pip install modal && modal setup
+   ```
+3. Create secret:
+   ```bash
+   modal secret create options-training \
+     HF_TOKEN=your_hf_token \
+     HF_CHECKPOINT_REPO=Rohan5commit/options-llm-checkpoints
+   ```
+4. Deploy training:
+   ```bash
+   modal deploy finetune/modal_train.py
+   ```
+5. Phase 2 uses $30 = 27.3 hours of training
 
 ### 4. GitHub Secrets
 Add these secrets to your GitHub repository:
@@ -74,13 +95,14 @@ python main.py
 ```
 ├── .github/workflows/
 │   ├── trade.yml            # Daily trading cron
-│   └── retrain.yml          # Retrain workflow (Lightning.ai)
+│   └── retrain.yml          # Retrain workflow
 ├── finetune/
-│   ├── build_dataset.py     # Training data construction (100K examples)
-│   ├── train.py             # LoRA fine-tuning (runs on Lightning.ai)
-│   ├── run_lightning.sh     # Lightning.ai training script
-│   ├── lightning_helper.py  # Account switching & budget tracking
-│   └── Dockerfile           # Lightning.ai container image
+│   ├── build_dataset.py     # Training data (160K examples)
+│   ├── train.py             # LoRA fine-tuning
+│   ├── run_lightning.sh     # Phase 1: Lightning.ai script
+│   ├── modal_train.py       # Phase 2: Modal training script
+│   ├── lightning_helper.py  # Status tracking & instructions
+│   └── Dockerfile           # Container image
 ├── state/
 │   ├── positions.json       # Open positions
 │   └── daily_log.json       # Trade history
@@ -126,26 +148,30 @@ The bot uses a LoRA-adapted Llama-3-8B model trained on:
 - Black-Scholes Greeks, IV term structure
 - 10 varied instruction templates
 
-**Training cost:** ~$40 on Lightning.ai A10G ($0.71/hr × 56hrs)
-**Inference cost:** ~$0.30/month on Modal L4
+**Training plan:**
+| Phase | Platform | GPU | Budget | Hours |
+|-------|----------|-----|--------|-------|
+| Phase 1 | Lightning.ai | L4 @ $0.48/hr | $15 | 31.25 |
+| Phase 2 | Modal | A10G @ $1.10/hr | $30 | 27.3 |
+| **Total** | | | **$45** | **58.5** |
 
-### Budget & Account Switching
+**Inference cost:** ~$0.30/month on Modal A10G
 
-Total budget: $45 ($40 training + $5 buffer).
+### Budget & Checkpoints
 
 - Checkpoints save to HuggingFace Hub every 1000 steps
-- When one account's budget runs out, open a new account
-- Training resumes from latest Hub checkpoint automatically
+- Training resumes automatically across platforms
+- No data is lost when switching from Lightning to Modal
 
 ```bash
-# Check training status and budget
+# Check training status
 python finetune/lightning_helper.py status
 
-# Reset for new account
-python finetune/lightning_helper.py reset
+# Get Phase 2 instructions
+python finetune/lightning_helper.py phase2
 
-# View checkpoints on Hub
-python finetune/lightning_helper.py checkpoints
+# Reset for platform switch
+python finetune/lightning_helper.py reset
 ```
 
 ## Email Reports

@@ -18,17 +18,22 @@ ALPACA_PAPER: bool = True
 ALPACA_BASE_URL: str = "https://paper-api.alpaca.markets"
 ALPACA_DATA_URL: str = "https://data.alpaca.markets"
 
-# ── Modal (inference only) ────────────────────────────────────────────────────
+# ── Modal (inference + Phase 2 training) ──────────────────────────────────────
 MODAL_TOKEN_ID: str = os.environ.get("MODAL_TOKEN_ID", "")
 MODAL_TOKEN_SECRET: str = os.environ.get("MODAL_TOKEN_SECRET", "")
-MODAL_GPU_TYPE: str = "L4"
+MODAL_GPU_TYPE: str = "A10G"
 MODAL_INFERENCE_TIMEOUT: int = 120
+MODAL_TRAINING_GPU_PRICE: float = 1.10  # A10G at $1.10/hr
 
-# ── Lightning.ai (training) ───────────────────────────────────────────────────
-LIGHTNING_GPU: str = "A10G"
-LIGHTNING_GPU_PRICE_HR: float = 0.71  # A10G at $0.71/hr
-LIGHTNING_MAX_BUDGET: float = 45.0    # $40 training + $5 buffer
-HF_CHECKPOINT_REPO: str = os.environ.get("HF_CHECKPOINT_REPO", "Rohan5commit/options-llm-checkpoints")
+# ── Lightning.ai (Phase 1 training) ───────────────────────────────────────────
+LIGHTNING_GPU: str = "L4"
+LIGHTNING_GPU_PRICE_HR: float = 0.48   # L4 at $0.48/hr
+LIGHTNING_BUDGET: float = 15.0         # Phase 1 budget
+
+# ── Training Budget ────────────────────────────────────────────────────────────
+TRAINING_TOTAL_BUDGET: float = 45.0    # $15 Lightning + $30 Modal
+TRAINING_DATA_EXAMPLES: int = 160_000
+TRAINING_EPOCHS: int = 8
 
 # ── HuggingFace ───────────────────────────────────────────────────────────────
 HF_TOKEN: str = os.environ.get("HF_TOKEN", "")

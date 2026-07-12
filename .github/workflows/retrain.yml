@@ -1,4 +1,4 @@
-name: Retrain on Lightning.ai
+name: Retrain Model
 
 on:
   workflow_dispatch:
@@ -73,36 +73,38 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: Print Lightning.ai Instructions
+      - name: Print Training Instructions
         run: |
           echo "=========================================="
-          echo "  Lightning.ai Training Instructions"
+          echo "  Two-Phase Training Plan"
           echo "=========================================="
           echo ""
-          echo "GPU: A10G at \$0.71/hr"
-          echo "Budget: \$45 total (\$40 training + \$5 buffer)"
+          echo "Total Budget: \$45"
           echo ""
-          echo "SETUP (First Account):"
-          echo "1. Go to https://lightning.ai"
-          echo "2. Create account (get free credits)"
-          echo "3. Open Studio with L4 GPU"
-          echo "4. In Studio terminal:"
-          echo "   git clone https://github.com/Rohan5commit/options-trading-bot.git"
-          echo "   cd options-trading-bot"
-          echo "   export HF_TOKEN=your_hf_token"
-          echo "   export HF_CHECKPOINT_REPO=Rohan5commit/options-llm-checkpoints"
-          echo "   bash finetune/run_lightning.sh"
+          echo "PHASE 1: Lightning.ai"
+          echo "  GPU: L4 at \$0.48/hr"
+          echo "  Budget: \$15 (31.25 hours)"
+          echo "  Steps:"
+          echo "    1. Go to https://lightning.ai"
+          echo "    2. Open Studio with L4 GPU"
+          echo "    3. In terminal:"
+          echo "       git clone https://github.com/Rohan5commit/options-trading-bot.git"
+          echo "       cd options-trading-bot"
+          echo "       export HF_TOKEN=your_token"
+          echo "       bash finetune/run_lightning.sh"
           echo ""
-          echo "ACCOUNT SWITCHING:"
-          echo "1. When budget runs out, close Studio"
-          echo "2. Create new Lightning.ai account"
-          echo "3. Open new Studio with L4 GPU"
-          echo "4. Run same commands above"
-          echo "5. Training resumes from latest HF Hub checkpoint"
+          echo "PHASE 2: Modal.com"
+          echo "  GPU: A10G at \$1.10/hr"
+          echo "  Budget: \$30 (27.3 hours)"
+          echo "  Steps:"
+          echo "    1. Go to https://modal.com"
+          echo "    2. pip install modal && modal setup"
+          echo "    3. modal secret create options-training HF_TOKEN=your_token"
+          echo "    4. modal deploy finetune/modal_train.py"
           echo ""
           echo "CHECK STATUS:"
-          echo "   python finetune/lightning_helper.py status"
+          echo "  python finetune/lightning_helper.py status"
           echo ""
-          echo "RESET FOR NEW ACCOUNT:"
-          echo "   python finetune/lightning_helper.py reset"
+          echo "PHASE 2 INSTRUCTIONS:"
+          echo "  python finetune/lightning_helper.py phase2"
           echo "=========================================="

@@ -1,23 +1,26 @@
 #!/bin/bash
-# Lightning.ai training script
+# Lightning.ai Phase 1 training script
 # Run inside a Lightning.ai Studio with L4 GPU
 #
 # Setup:
-#   1. Open Lightning.ai Studio with L4 GPU ($0.60/hr)
+#   1. Open Lightning.ai Studio with L4 GPU ($0.48/hr)
 #   2. Clone repo: git clone https://github.com/Rohan5commit/options-trading-bot.git
 #   3. cd options-trading-bot
 #   4. bash finetune/run_lightning.sh
 #
-# Account switching:
-#   1. Checkpoints auto-save to HF Hub every 1000 steps
-#   2. When budget runs out, open new Studio with L4 GPU
-#   3. Run this script again - it resumes from latest checkpoint
+# Phase 1 budget: $15 = 31.25 hours on L4
+# After Phase 1, switch to Modal Phase 2 (see: python finetune/lightning_helper.py phase2)
 
 set -e
 
-echo "=== Options LLM Training on Lightning.ai ==="
-echo "GPU: A10G at \$0.71/hr"
-echo "Budget: \$45 total (\$40 training + \$5 buffer)"
+echo "=========================================="
+echo "  Options LLM Training - Phase 1"
+echo "  Lightning.ai L4 GPU"
+echo "=========================================="
+echo ""
+echo "GPU: L4 at \$0.48/hr"
+echo "Budget: \$15 (31.25 hours)"
+echo "Training: 160K examples × 8 epochs"
 echo ""
 
 # Check for GPU
@@ -44,7 +47,7 @@ fi
 
 # Build dataset if not exists
 if [ ! -f "./training_data/train.jsonl" ]; then
-    echo "Building training dataset..."
+    echo "Building training dataset (160K examples)..."
     python finetune/build_dataset.py
 else
     echo "Training dataset already exists."
@@ -53,15 +56,25 @@ fi
 # Count examples
 TRAIN_COUNT=$(wc -l < ./training_data/train.jsonl)
 echo "Training examples: $TRAIN_COUNT"
+echo ""
 
 # Start training
-echo ""
-echo "Starting training..."
+echo "Starting Phase 1 training..."
 echo "Checkpoints save to HF Hub every 1000 steps"
-echo "To resume on new account, just run this script again"
+echo "After \$15 budget, switch to Modal Phase 2"
 echo ""
+
+export GPU_PRICE_HR=0.48
+export TRAINING_BUDGET=15.0
+export GPU_NAME="L4"
 
 python finetune/train.py
 
 echo ""
-echo "=== Training Complete ==="
+echo "=========================================="
+echo "  Phase 1 Complete!"
+echo "=========================================="
+echo ""
+echo "Next: Switch to Modal Phase 2"
+echo "  python finetune/lightning_helper.py phase2"
+echo ""

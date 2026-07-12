@@ -707,7 +707,7 @@ def _generate_diverse_instructions() -> list[str]:
 def build_dataset(output_dir: str = "./training_data", num_samples: int = 160_000) -> None:
     """
     Build the full training dataset and save as JSONL.
-    Target: 160K examples for ~$40 training cost on Lightning.ai A10G ($0.71/hr).
+    Target: 160K examples for ~$45 training cost (2-phase: Lightning L4 + Modal A10G).
     """
     os.makedirs(output_dir, exist_ok=True)
 

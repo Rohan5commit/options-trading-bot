@@ -24,8 +24,9 @@ ENV BASE_MODEL_NAME=meta-llama/Meta-Llama-3-8B-Instruct
 ENV OUTPUT_DIR=/workspace/output/options_llm
 ENV TRAINING_DATA=/workspace/finetune/training_data/train.jsonl
 ENV EVAL_DATA=/workspace/finetune/training_data/test.jsonl
-ENV GPU_PRICE_HR=0.71
-ENV MAX_BUDGET=45.0
+ENV GPU_PRICE_HR=0.48
+ENV TRAINING_BUDGET=15.0
+ENV GPU_NAME=L4
 
 # Default command
 CMD ["bash", "/workspace/finetune/run_lightning.sh"]
