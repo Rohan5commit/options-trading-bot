@@ -16,8 +16,8 @@
 set -e
 
 echo "=== Options LLM Training on Lightning.ai ==="
-echo "GPU: L4 at \$0.60/hr"
-echo "Budget: \$45 total across accounts"
+echo "GPU: A10G at \$0.71/hr"
+echo "Budget: \$45 total (\$40 training + \$5 buffer)"
 echo ""
 
 # Check for GPU

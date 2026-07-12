@@ -1,8 +1,8 @@
 """
 Dataset builder for LoRA fine-tuning.
-Generates 100K+ instruction-following examples across multiple market regimes
+Generates 160K instruction-following examples across multiple market regimes
 with realistic options chain data, Greeks, and strategy selection.
-Target: $30-50 training cost on OVH Cloud V100S (t2-le-45).
+Target: ~$40 training cost on Lightning.ai A10G ($0.71/hr × 56hrs).
 """
 import json
 import logging
@@ -704,10 +704,10 @@ def _generate_diverse_instructions() -> list[str]:
     ]
 
 
-def build_dataset(output_dir: str = "./training_data", num_samples: int = 100_000) -> None:
+def build_dataset(output_dir: str = "./training_data", num_samples: int = 160_000) -> None:
     """
     Build the full training dataset and save as JSONL.
-    Target: 100K+ examples for $30-50 training cost on OVH V100S.
+    Target: 160K examples for ~$40 training cost on Lightning.ai A10G ($0.71/hr).
     """
     os.makedirs(output_dir, exist_ok=True)
 

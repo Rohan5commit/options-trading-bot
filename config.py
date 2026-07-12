@@ -25,8 +25,9 @@ MODAL_GPU_TYPE: str = "L4"
 MODAL_INFERENCE_TIMEOUT: int = 120
 
 # ── Lightning.ai (training) ───────────────────────────────────────────────────
-LIGHTNING_GPU_PRICE_HR: float = 0.60  # L4 at $0.60/hr
-LIGHTNING_MAX_BUDGET: float = 45.0    # Total budget across accounts
+LIGHTNING_GPU: str = "A10G"
+LIGHTNING_GPU_PRICE_HR: float = 0.71  # A10G at $0.71/hr
+LIGHTNING_MAX_BUDGET: float = 45.0    # $40 training + $5 buffer
 HF_CHECKPOINT_REPO: str = os.environ.get("HF_CHECKPOINT_REPO", "Rohan5commit/options-llm-checkpoints")
 
 # ── HuggingFace ───────────────────────────────────────────────────────────────

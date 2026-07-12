@@ -14,7 +14,7 @@ GitHub Actions (Daily 9:35 ET)
     → email_reporter.py     (send summary)
 
 Modal GPU (L4)              → Llama-3-8B + LoRA inference
-Lightning.ai (L4)           → LoRA fine-tuning ($0.60/hr)
+Lightning.ai (A10G)         → LoRA fine-tuning ($0.71/hr)
 Alpaca Paper Trading API    → Options chain, orders, positions
 yfinance + Polygon.io       → Price data, IV, news, earnings
 ```
@@ -36,7 +36,7 @@ yfinance + Polygon.io       → Price data, IV, news, earnings
 
 ### 3. Lightning.ai (Training)
 1. Create a free [Lightning.ai](https://lightning.ai) account
-2. Open a Studio with **L4 GPU** ($0.60/hr)
+2. Open a Studio with **A10G GPU** ($0.71/hr)
 3. In the Studio terminal:
    ```bash
    git clone https://github.com/Rohan5commit/options-trading-bot.git
@@ -121,17 +121,17 @@ python main.py
 ## Fine-Tuning
 
 The bot uses a LoRA-adapted Llama-3-8B model trained on:
-- 100K synthetic options trading scenarios
+- 160K synthetic options trading scenarios
 - 12 market regimes (bull/bear/sideways × high/low/normal IV × earnings/no-earnings)
 - Black-Scholes Greeks, IV term structure
 - 10 varied instruction templates
 
-**Training cost:** ~$30 on Lightning.ai L4 ($0.60/hr × 50hrs)
+**Training cost:** ~$40 on Lightning.ai A10G ($0.71/hr × 56hrs)
 **Inference cost:** ~$0.30/month on Modal L4
 
 ### Budget & Account Switching
 
-Total budget: $45 across multiple Lightning.ai accounts.
+Total budget: $45 ($40 training + $5 buffer).
 
 - Checkpoints save to HuggingFace Hub every 1000 steps
 - When one account's budget runs out, open a new account

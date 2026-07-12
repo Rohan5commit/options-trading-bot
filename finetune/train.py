@@ -43,7 +43,7 @@ TRAINING_DATA = os.environ.get("TRAINING_DATA", "./training_data/train.jsonl")
 EVAL_DATA = os.environ.get("EVAL_DATA", "./training_data/test.jsonl")
 
 # Cost tracking
-LIGHTNING_GPU_PRICE_PER_HR = float(os.environ.get("GPU_PRICE_HR", "0.60"))
+LIGHTNING_GPU_PRICE_PER_HR = float(os.environ.get("GPU_PRICE_HR", "0.71"))
 MAX_BUDGET = float(os.environ.get("MAX_BUDPUT", "45.0"))
 
 # LoRA configuration
@@ -56,7 +56,7 @@ TARGET_MODULES = [
 ]
 
 # Training hyperparameters
-# 100K examples × 10 epochs on L4 ($0.60/hr) ≈ 50 hours ≈ $30
+# 160K examples × 10 epochs on A10G ($0.71/hr) ≈ 56 hours ≈ $40
 NUM_EPOCHS = 10
 PER_DEVICE_BATCH_SIZE = 2
 GRADIENT_ACCUMULATION_STEPS = 8  # effective batch = 16

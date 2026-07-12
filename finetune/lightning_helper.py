@@ -19,7 +19,7 @@ import requests
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "./finetuned_models/options_llm")
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 HF_REPO = os.environ.get("HF_CHECKPOINT_REPO", "Rohan5commit/options-llm-checkpoints")
-GPU_PRICE_HR = float(os.environ.get("GPU_PRICE_HR", "0.60"))
+GPU_PRICE_HR = float(os.environ.get("GPU_PRICE_HR", "0.71"))
 MAX_BUDGET = float(os.environ.get("MAX_BUDGET", "45.0"))
 
 
