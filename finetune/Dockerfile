@@ -1,4 +1,4 @@
-FROM ovhcom/ai-training-pytorch:2.1.0
+FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
 
 WORKDIR /workspace
 
@@ -24,6 +24,8 @@ ENV BASE_MODEL_NAME=meta-llama/Meta-Llama-3-8B-Instruct
 ENV OUTPUT_DIR=/workspace/output/options_llm
 ENV TRAINING_DATA=/workspace/finetune/training_data/train.jsonl
 ENV EVAL_DATA=/workspace/finetune/training_data/test.jsonl
+ENV GPU_PRICE_HR=0.60
+ENV MAX_BUDGET=45.0
 
 # Default command
-CMD ["python", "/workspace/finetune/train.py"]
+CMD ["bash", "/workspace/finetune/run_lightning.sh"]

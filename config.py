@@ -24,16 +24,15 @@ MODAL_TOKEN_SECRET: str = os.environ.get("MODAL_TOKEN_SECRET", "")
 MODAL_GPU_TYPE: str = "L4"
 MODAL_INFERENCE_TIMEOUT: int = 120
 
-# ── OVH Cloud (training) ─────────────────────────────────────────────────────
-OVH_TOKEN: str = os.environ.get("OVH_TOKEN", "")
-OVH_REGION: str = "GRA"
-# H100 80GB at $3.50/hr — 100K examples × 10 epochs ≈ 8 hours ≈ $28
-OVH_TRAINING_GPU: str = "h100-380"
-OVH_TRAINING_TIMEOUT: str = "12h"
+# ── Lightning.ai (training) ───────────────────────────────────────────────────
+LIGHTNING_GPU_PRICE_HR: float = 0.60  # L4 at $0.60/hr
+LIGHTNING_MAX_BUDGET: float = 45.0    # Total budget across accounts
+HF_CHECKPOINT_REPO: str = os.environ.get("HF_CHECKPOINT_REPO", "Rohan5commit/options-llm-checkpoints")
 
 # ── HuggingFace ───────────────────────────────────────────────────────────────
 HF_TOKEN: str = os.environ.get("HF_TOKEN", "")
 HF_MODEL_REPO: str = "Rohan5commit/options-llm-lora"
+HF_CHECKPOINT_REPO: str = "Rohan5commit/options-llm-checkpoints"
 BASE_MODEL_NAME: str = "meta-llama/Meta-Llama-3-8B-Instruct"
 
 # ── Polygon.io ────────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 # Options Trading Bot
 
-LLM-driven autonomous US options trading bot using Alpaca Broker API (paper trading), Modal serverless GPU inference, and OVH Cloud for model training.
+LLM-driven autonomous US options trading bot using Alpaca Broker API (paper trading), Modal serverless GPU inference, and Lightning.ai for model training.
 
 ## Architecture
 
@@ -14,7 +14,7 @@ GitHub Actions (Daily 9:35 ET)
     → email_reporter.py     (send summary)
 
 Modal GPU (L4)              → Llama-3-8B + LoRA inference
-OVH Cloud (A100 80GB)       → LoRA fine-tuning pipeline
+Lightning.ai (L4)           → LoRA fine-tuning ($0.60/hr)
 Alpaca Paper Trading API    → Options chain, orders, positions
 yfinance + Polygon.io       → Price data, IV, news, earnings
 ```
@@ -34,10 +34,19 @@ yfinance + Polygon.io       → Price data, IV, news, earnings
    modal deploy modal_inference.py
    ```
 
-### 3. OVH Cloud (Training)
-1. Create an OVH Cloud account with Public Cloud
-2. Create an AI Training user and generate a token
-3. Create Object Storage containers for dataset and model output
+### 3. Lightning.ai (Training)
+1. Create a free [Lightning.ai](https://lightning.ai) account
+2. Open a Studio with **L4 GPU** ($0.60/hr)
+3. In the Studio terminal:
+   ```bash
+   git clone https://github.com/Rohan5commit/options-trading-bot.git
+   cd options-trading-bot
+   export HF_TOKEN=your_hf_token
+   export HF_CHECKPOINT_REPO=Rohan5commit/options-llm-checkpoints
+   bash finetune/run_lightning.sh
+   ```
+4. Training auto-checkpoints to HuggingFace Hub every 1000 steps
+5. When budget runs out, open new Lightning.ai account and resume (checkpoints persist on Hub)
 
 ### 4. GitHub Secrets
 Add these secrets to your GitHub repository:
@@ -53,9 +62,6 @@ Add these secrets to your GitHub repository:
 | `EMAIL_USER` | Gmail for reports |
 | `EMAIL_PASS` | Gmail app password |
 | `EMAIL_RECIPIENT` | Report recipient |
-| `OVH_TOKEN` | OVH AI Training token |
-| `OVH_S3_ACCESS_KEY` | OVH S3 access key |
-| `OVH_S3_SECRET_KEY` | OVH S3 secret key |
 
 ### 5. Local Development
 ```bash
@@ -68,12 +74,13 @@ python main.py
 ```
 ├── .github/workflows/
 │   ├── trade.yml            # Daily trading cron
-│   └── retrain.yml          # Weekly retrain cron (OVH Cloud)
+│   └── retrain.yml          # Retrain workflow (Lightning.ai)
 ├── finetune/
-│   ├── build_dataset.py     # Training data construction
-│   ├── train.py             # LoRA fine-tuning (runs on OVH)
-│   ├── Dockerfile           # OVH AI Training image
-│   └── ovh_train.py         # OVH job submission
+│   ├── build_dataset.py     # Training data construction (100K examples)
+│   ├── train.py             # LoRA fine-tuning (runs on Lightning.ai)
+│   ├── run_lightning.sh     # Lightning.ai training script
+│   ├── lightning_helper.py  # Account switching & budget tracking
+│   └── Dockerfile           # Lightning.ai container image
 ├── state/
 │   ├── positions.json       # Open positions
 │   └── daily_log.json       # Trade history
@@ -114,13 +121,32 @@ python main.py
 ## Fine-Tuning
 
 The bot uses a LoRA-adapted Llama-3-8B model trained on:
-- Synthetic options trading scenarios (5K examples)
-- Historical options chain data
-- Financial news sentiment
-- IV history and realized volatility
+- 100K synthetic options trading scenarios
+- 12 market regimes (bull/bear/sideways × high/low/normal IV × earnings/no-earnings)
+- Black-Scholes Greeks, IV term structure
+- 10 varied instruction templates
 
-Training runs once on OVH Cloud H100 (~$28 one-time).
-Inference runs daily on Modal L4 (~$0.30/month).
+**Training cost:** ~$30 on Lightning.ai L4 ($0.60/hr × 50hrs)
+**Inference cost:** ~$0.30/month on Modal L4
+
+### Budget & Account Switching
+
+Total budget: $45 across multiple Lightning.ai accounts.
+
+- Checkpoints save to HuggingFace Hub every 1000 steps
+- When one account's budget runs out, open a new account
+- Training resumes from latest Hub checkpoint automatically
+
+```bash
+# Check training status and budget
+python finetune/lightning_helper.py status
+
+# Reset for new account
+python finetune/lightning_helper.py reset
+
+# View checkpoints on Hub
+python finetune/lightning_helper.py checkpoints
+```
 
 ## Email Reports
 

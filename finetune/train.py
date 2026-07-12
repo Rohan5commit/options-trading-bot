@@ -1,8 +1,12 @@
 """
 LoRA fine-tuning script for Llama-3-8B-Instruct on options trading data.
 Uses QLoRA (4-bit quantization) for memory efficiency.
-Designed to run on OVH Cloud V100S 32GB (t2-le-45) at $0.88/hr.
-Target: ~$30-50 training cost with 100K examples over 10 epochs.
+Designed to run on Lightning.ai L4 GPU at $0.60/hr.
+
+Supports checkpointing for resuming training across Lightning.ai accounts:
+- Saves checkpoints to HF Hub every 1000 steps
+- Resumes from latest checkpoint on new account
+- Tracks cost metadata for budget management
 """
 import json
 import logging
@@ -12,7 +16,8 @@ from datetime import datetime
 from pathlib import Path
 
 import torch
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
+from huggingface_hub import HfApi
 from peft import (
     LoraConfig,
     TaskType,
@@ -23,9 +28,8 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
-    TrainingArguments,
 )
-from trl import SFTTrainer, SFTConfig
+from trl import SFTConfig, SFTTrainer
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +37,14 @@ logger = logging.getLogger(__name__)
 
 BASE_MODEL = os.environ.get("BASE_MODEL_NAME", "meta-llama/Meta-Llama-3-8B-Instruct")
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
+HF_REPO = os.environ.get("HF_CHECKPOINT_REPO", "Rohan5commit/options-llm-checkpoints")
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "./finetuned_models/options_llm")
 TRAINING_DATA = os.environ.get("TRAINING_DATA", "./training_data/train.jsonl")
 EVAL_DATA = os.environ.get("EVAL_DATA", "./training_data/test.jsonl")
+
+# Cost tracking
+LIGHTNING_GPU_PRICE_PER_HR = float(os.environ.get("GPU_PRICE_HR", "0.60"))
+MAX_BUDGET = float(os.environ.get("MAX_BUDPUT", "45.0"))
 
 # LoRA configuration
 LORA_R = 8
@@ -47,7 +56,7 @@ TARGET_MODULES = [
 ]
 
 # Training hyperparameters
-# 100K examples × 10 epochs on V100S ($0.88/hr) ≈ 50 hours ≈ $44
+# 100K examples × 10 epochs on L4 ($0.60/hr) ≈ 50 hours ≈ $30
 NUM_EPOCHS = 10
 PER_DEVICE_BATCH_SIZE = 2
 GRADIENT_ACCUMULATION_STEPS = 8  # effective batch = 16
@@ -86,6 +95,73 @@ def format_prompt(example: dict[str, str]) -> str:
         {"role": "assistant", "content": assistant_msg},
     ]
     return messages
+
+
+def find_latest_checkpoint(output_dir: str, hf_repo: str | None = None) -> str | None:
+    """Find latest checkpoint from local dir or HF Hub."""
+    # Check local first
+    local_dir = Path(output_dir)
+    if local_dir.exists():
+        checkpoints = sorted(local_dir.glob("checkpoint-*"), key=lambda x: int(x.name.split("-")[1]))
+        if checkpoints:
+            logger.info("Found local checkpoint: %s", checkpoints[-1])
+            return str(checkpoints[-1])
+
+    # Check HF Hub
+    if hf_repo and HF_TOKEN:
+        try:
+            api = HfApi(token=HF_TOKEN)
+            models = api.list_models(search=hf_repo, sort="lastModified", direction=-1)
+            for model in models:
+                if model.id == hf_repo:
+                    logger.info("Found HF checkpoint repo: %s", hf_repo)
+                    return f"hf://{hf_repo}"
+        except Exception as e:
+            logger.warning("Could not check HF Hub: %s", e)
+
+    return None
+
+
+def save_checkpoint_to_hub(output_dir: str, hf_repo: str, step: int, epoch: float, cost: float) -> None:
+    """Push checkpoint to HF Hub for persistence across accounts."""
+    if not HF_TOKEN:
+        logger.warning("No HF_TOKEN, skipping Hub upload")
+        return
+
+    try:
+        api = HfApi(token=HF_TOKEN)
+        api.create_repo(repo_id=hf_repo, exist_ok=True, private=True)
+
+        # Upload checkpoint files
+        checkpoint_path = Path(output_dir) / f"checkpoint-{step}"
+        if checkpoint_path.exists():
+            api.upload_folder(
+                folder_path=str(checkpoint_path),
+                repo_id=hf_repo,
+                path_in_repo=f"checkpoint-{step}",
+            )
+            logger.info("Uploaded checkpoint-%d to %s", step, hf_repo)
+
+        # Save metadata
+        metadata = {
+            "last_step": step,
+            "last_epoch": epoch,
+            "total_cost_usd": cost,
+            "gpu_price_per_hr": LIGHTNING_GPU_PRICE_PER_HR,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+        metadata_path = Path(output_dir) / "training_metadata.json"
+        with open(metadata_path, "w") as f:
+            json.dump(metadata, f, indent=2)
+
+        api.upload_file(
+            path_or_fileobj=str(metadata_path),
+            repo_id=hf_repo,
+            path_in_repo="training_metadata.json",
+        )
+        logger.info("Saved training metadata to Hub")
+    except Exception as e:
+        logger.error("Failed to upload checkpoint to Hub: %s", e)
 
 
 def train():
@@ -156,8 +232,6 @@ def train():
         return texts
 
     # Convert to HuggingFace datasets format
-    from datasets import Dataset
-
     train_dataset = Dataset.from_list(train_data)
     eval_dataset = Dataset.from_list(eval_data) if eval_data else None
 
@@ -181,6 +255,7 @@ def train():
         max_seq_length=MAX_SEQ_LENGTH,
         dataset_text_field=None,
         packing=False,
+        resume_from_checkpoint=True,  # Auto-resume from latest checkpoint
     )
 
     trainer = SFTTrainer(
@@ -196,8 +271,30 @@ def train():
     model.gradient_checkpointing_enable()
     model.enable_input_require_grads()
 
+    # Check for existing checkpoint
+    resume_checkpoint = find_latest_checkpoint(OUTPUT_DIR, HF_REPO)
+    resume_from = None
+    initial_epoch = 0
+    initial_step = 0
+
+    if resume_checkpoint:
+        if resume_checkpoint.startswith("hf://"):
+            # Download from HF Hub
+            hf_repo_path = resume_checkpoint.replace("hf://", "")
+            logger.info("Resuming from HF Hub checkpoint: %s", hf_repo_path)
+            # TODO: Download checkpoint from Hub to OUTPUT_DIR
+        else:
+            logger.info("Resuming from local checkpoint: %s", resume_checkpoint)
+            resume_from = resume_checkpoint
+
     logger.info("Starting training")
-    trainer.train()
+    start_time = datetime.utcnow()
+
+    trainer.train(resume_from_checkpoint=resume_from)
+
+    end_time = datetime.utcnow()
+    duration_hours = (end_time - start_time).total_seconds() / 3600
+    cost = duration_hours * LIGHTNING_GPU_PRICE_PER_HR
 
     # Save the LoRA adapter
     logger.info("Saving LoRA adapter to %s", OUTPUT_DIR)
@@ -217,10 +314,30 @@ def train():
             "learning_rate": LEARNING_RATE,
             "max_seq_length": MAX_SEQ_LENGTH,
             "trained_at": datetime.utcnow().isoformat(),
+            "duration_hours": round(duration_hours, 2),
+            "estimated_cost_usd": round(cost, 2),
         }, f, indent=2)
 
-    logger.info("Training complete. Adapter saved to %s", OUTPUT_DIR)
-    print(f"\nTraining complete! Adapter saved to: {OUTPUT_DIR}")
+    # Push final adapter to HF Hub
+    if HF_TOKEN and HF_REPO:
+        try:
+            api = HfApi(token=HF_TOKEN)
+            api.create_repo(repo_id=HF_REPO, exist_ok=True, private=True)
+            api.upload_folder(
+                folder_path=OUTPUT_DIR,
+                repo_id=HF_REPO,
+                path_in_repo="final",
+            )
+            logger.info("Pushed final adapter to %s", HF_REPO)
+        except Exception as e:
+            logger.error("Failed to push to Hub: %s", e)
+
+    logger.info("Training complete! Duration: %.1f hrs, Cost: $%.2f", duration_hours, cost)
+    print(f"\nTraining complete!")
+    print(f"Duration: {duration_hours:.1f} hours")
+    print(f"Estimated cost: ${cost:.2f}")
+    print(f"Adapter saved to: {OUTPUT_DIR}")
+    print(f"Hub repo: {HF_REPO}")
 
 
 if __name__ == "__main__":

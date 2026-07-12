@@ -1,14 +1,23 @@
-name: Weekly Retrain on OVH Cloud
+name: Retrain on Lightning.ai
 
 on:
-  schedule:
-    - cron: '0 3 * * 0'  # Every Sunday at 3:00 UTC
   workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'build_dataset'
+        type: choice
+        options:
+          - build_dataset
+          - check_status
+          - full_instructions
 
 jobs:
-  retrain:
+  build-dataset:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    if: ${{ github.event.inputs.action == 'build_dataset' || github.event.inputs.action == 'full_instructions' }}
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -24,7 +33,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install ovhai
 
       - name: Build training dataset
         run: python finetune/build_dataset.py
@@ -32,36 +40,69 @@ jobs:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
 
-      - name: Upload dataset to OVH Object Storage
-        run: |
-          # Upload training data to OVH Object Storage via S3-compatible API
-          aws s3 sync ./training_data s3://options-training-data/ \
-            --endpoint-url https://s3.${OVH_REGION}.cloud.ovh.net \
-            --region ${OVH_REGION}
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.OVH_S3_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.OVH_S3_SECRET_KEY }}
-          OVH_REGION: GRA
+      - name: Upload dataset as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: training-data
+          path: training_data/
+          retention-days: 7
 
-      - name: Submit OVH training job
-        run: python finetune/ovh_train.py
-        env:
-          OVH_TOKEN: ${{ secrets.OVH_TOKEN }}
-          OVH_REGION: GRA
-          OVH_TRAINING_GPU: h100-380
-          OVH_TRAINING_TIMEOUT: 12h
-          OVH_DOCKER_IMAGE: rohan5commit/options-trainer:latest
-          OVH_DATASET_CONTAINER: options-training-data
-          OVH_OUTPUT_CONTAINER: options-model-output
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          BASE_MODEL_NAME: meta-llama/Meta-Llama-3-8B-Instruct
+  check-status:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.action == 'check_status' }}
+    timeout-minutes: 10
 
-      - name: Pull trained adapter to HuggingFace
-        run: |
-          # After training completes, pull the adapter from OVH and push to HF Hub
-          # This step assumes the OVH job has completed and the adapter is in the output container
-          echo "Training job submitted. Check OVH AI Training dashboard for completion."
-          echo "Once complete, download the adapter from the options-model-output container"
-          echo "and push to HuggingFace Hub: ${{ secrets.HF_MODEL_REPO }}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check training status
+        run: python finetune/lightning_helper.py status
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_CHECKPOINT_REPO: Rohan5commit/options-llm-checkpoints
+
+  show-instructions:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.action == 'full_instructions' }}
+    timeout-minutes: 5
+
+    steps:
+      - name: Print Lightning.ai Instructions
+        run: |
+          echo "=========================================="
+          echo "  Lightning.ai Training Instructions"
+          echo "=========================================="
+          echo ""
+          echo "GPU: L4 at \$0.60/hr"
+          echo "Budget: \$45 total across accounts"
+          echo ""
+          echo "SETUP (First Account):"
+          echo "1. Go to https://lightning.ai"
+          echo "2. Create account (get free credits)"
+          echo "3. Open Studio with L4 GPU"
+          echo "4. In Studio terminal:"
+          echo "   git clone https://github.com/Rohan5commit/options-trading-bot.git"
+          echo "   cd options-trading-bot"
+          echo "   export HF_TOKEN=your_hf_token"
+          echo "   export HF_CHECKPOINT_REPO=Rohan5commit/options-llm-checkpoints"
+          echo "   bash finetune/run_lightning.sh"
+          echo ""
+          echo "ACCOUNT SWITCHING:"
+          echo "1. When budget runs out, close Studio"
+          echo "2. Create new Lightning.ai account"
+          echo "3. Open new Studio with L4 GPU"
+          echo "4. Run same commands above"
+          echo "5. Training resumes from latest HF Hub checkpoint"
+          echo ""
+          echo "CHECK STATUS:"
+          echo "   python finetune/lightning_helper.py status"
+          echo ""
+          echo "RESET FOR NEW ACCOUNT:"
+          echo "   python finetune/lightning_helper.py reset"
+          echo "=========================================="
