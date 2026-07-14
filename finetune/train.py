@@ -70,8 +70,8 @@ WEIGHT_DECAY = 0.01
 WARMUP_RATIO = 0.1
 MAX_SEQ_LENGTH = 2048
 LOGGING_STEPS = 50
-SAVE_STEPS = 1000
-EVAL_STEPS = 1000
+SAVE_STEPS = 100
+EVAL_STEPS = 100
 
 
 def load_and_format_dataset(path: str) -> list[dict[str, str]]:
@@ -169,9 +169,28 @@ def save_checkpoint_to_hub(output_dir: str, hf_repo: str, step: int, epoch: floa
         logger.error("Failed to upload checkpoint to Hub: %s", e)
 
 
+def upload_startup_marker():
+    """Upload a startup marker to HF Hub so we can verify training started."""
+    if not HF_TOKEN or not HF_REPO:
+        return
+    try:
+        api = HfApi(token=HF_TOKEN)
+        api.create_repo(repo_id=HF_REPO, exist_ok=True, private=True)
+        import tempfile, json as _json
+        marker = {"status": "training_started", "gpu": os.environ.get("GPU_NAME", "unknown"),
+                  "budget": TRAINING_BUDGET, "timestamp": datetime.utcnow().isoformat()}
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            _json.dump(marker, f, indent=2)
+            api.upload_file(path_or_fileobj=f.name, repo_id=HF_REPO, path_in_repo="startup_marker.json")
+        logger.info("Startup marker uploaded to %s", HF_REPO)
+    except Exception as e:
+        logger.warning("Could not upload startup marker: %s", e)
+
+
 def train():
     """Main training function."""
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    upload_startup_marker()
 
     logger.info("Loading tokenizer from %s", BASE_MODEL)
     tokenizer = AutoTokenizer.from_pretrained(
