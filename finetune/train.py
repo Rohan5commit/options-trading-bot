@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 BASE_MODEL = os.environ.get("BASE_MODEL_NAME", "meta-llama/Meta-Llama-3-8B-Instruct")
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
-HF_REPO = os.environ.get("HF_CHECKPOINT_REPO", "Rohan5commit/options-llm-checkpoints")
+HF_REPO = os.environ.get("HF_CHECKPOINT_REPO", "Rohan556/options-llm-checkpoints")
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "./finetuned_models/options_llm")
 TRAINING_DATA = os.environ.get("TRAINING_DATA", "./training_data/train.jsonl")
 EVAL_DATA = os.environ.get("EVAL_DATA", "./training_data/test.jsonl")

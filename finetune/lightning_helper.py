@@ -20,7 +20,7 @@ import requests
 
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "./finetuned_models/options_llm")
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
-HF_REPO = os.environ.get("HF_CHECKPOINT_REPO", "Rohan5commit/options-llm-checkpoints")
+HF_REPO = os.environ.get("HF_CHECKPOINT_REPO", "Rohan556/options-llm-checkpoints")
 
 # Phase 1: Lightning L4
 LIGHTNING_GPU_PRICE = 0.48
@@ -174,7 +174,7 @@ def show_phase2_instructions():
     print("2. Create Modal secret:")
     print("   modal secret create options-training \\")
     print("     HF_TOKEN=your_hf_token \\")
-    print("     HF_CHECKPOINT_REPO=Rohan5commit/options-llm-checkpoints")
+    print("     HF_CHECKPOINT_REPO=Rohan556/options-llm-checkpoints")
     print()
     print("3. Deploy training:")
     print("   modal deploy finetune/modal_train.py")

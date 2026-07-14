@@ -42,7 +42,7 @@ vol = modal.Volume("options-training-vol")
     secrets=[
         modal.Secret.from_dict({
             "HF_TOKEN": "",  # Set via: modal secret create options-training HF_TOKEN=your_token
-            "HF_CHECKPOINT_REPO": "Rohan5commit/options-llm-checkpoints",
+            "HF_CHECKPOINT_REPO": "Rohan556/options-llm-checkpoints",
             "GPU_PRICE_HR": "1.10",
             "TRAINING_BUDGET": "30.0",
             "GPU_NAME": "A10G",
@@ -76,7 +76,7 @@ def train():
     # Configuration
     BASE_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"
     HF_TOKEN = os.environ.get("HF_TOKEN", "")
-    HF_REPO = os.environ.get("HF_CHECKPOINT_REPO", "Rohan5commit/options-llm-checkpoints")
+    HF_REPO = os.environ.get("HF_CHECKPOINT_REPO", "Rohan556/options-llm-checkpoints")
     OUTPUT_DIR = "/vol/finetuned_models/options_llm"
     TRAINING_DATA = "/vol/training_data/train.jsonl"
     EVAL_DATA = "/vol/training_data/test.jsonl"

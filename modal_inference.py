@@ -57,7 +57,7 @@ class OptionsLLM:
 
         hf_token = os.environ.get("HF_TOKEN", "")
         model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
-        adapter_repo = "Rohan5commit/options-llm-lora"
+        adapter_repo = "Rohan556/options-llm-lora"
 
         logger.info("Loading tokenizer from %s", model_name)
         self.tokenizer = AutoTokenizer.from_pretrained(

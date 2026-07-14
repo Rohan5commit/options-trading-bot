@@ -61,7 +61,7 @@ yfinance + Polygon.io        → Price data, IV, news, earnings
    ```bash
    modal secret create options-training \
      HF_TOKEN=your_hf_token \
-     HF_CHECKPOINT_REPO=Rohan5commit/options-llm-checkpoints
+     HF_CHECKPOINT_REPO=Rohan556/options-llm-checkpoints
    ```
 4. Deploy training:
    ```bash

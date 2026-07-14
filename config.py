@@ -37,8 +37,8 @@ TRAINING_EPOCHS: int = 8
 
 # ── HuggingFace ───────────────────────────────────────────────────────────────
 HF_TOKEN: str = os.environ.get("HF_TOKEN", "")
-HF_MODEL_REPO: str = "Rohan5commit/options-llm-lora"
-HF_CHECKPOINT_REPO: str = "Rohan5commit/options-llm-checkpoints"
+HF_MODEL_REPO: str = "Rohan556/options-llm-lora"
+HF_CHECKPOINT_REPO: str = "Rohan556/options-llm-checkpoints"
 BASE_MODEL_NAME: str = "meta-llama/Meta-Llama-3-8B-Instruct"
 
 # ── Polygon.io ────────────────────────────────────────────────────────────────
