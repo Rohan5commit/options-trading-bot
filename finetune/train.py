@@ -238,26 +238,23 @@ def train():
     train_data = load_and_format_dataset(TRAINING_DATA)
     eval_data = load_and_format_dataset(EVAL_DATA) if os.path.exists(EVAL_DATA) else None
 
-    # Format data for SFT
-    def formatting_func(examples):
-        """Format batch of examples into tokenized prompts."""
+    # Pre-format all data into text strings
+    def format_all(data):
         texts = []
-        for i in range(len(examples["instruction"])):
-            example = {
-                "instruction": examples["instruction"][i],
-                "input": examples["input"][i],
-                "output": examples["output"][i],
-            }
-            messages = format_prompt(example)
+        for entry in data:
+            messages = format_prompt(entry)
             text = tokenizer.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=False
             )
             texts.append(text)
         return texts
 
-    # Convert to HuggingFace datasets format
-    train_dataset = Dataset.from_list(train_data)
-    eval_dataset = Dataset.from_list(eval_data) if eval_data else None
+    train_texts = format_all(train_data)
+    eval_texts = format_all(eval_data) if eval_data else None
+
+    # Convert to HuggingFace datasets format with "text" column
+    train_dataset = Dataset.from_dict({"text": train_texts})
+    eval_dataset = Dataset.from_dict({"text": eval_texts}) if eval_texts else None
 
     # Training arguments
     training_args = SFTConfig(
@@ -277,7 +274,6 @@ def train():
         save_total_limit=3,
         report_to="none",
         max_length=MAX_SEQ_LENGTH,
-        dataset_text_field=None,
         packing=False,
         resume_from_checkpoint=True,  # Auto-resume from latest checkpoint
     )
@@ -288,7 +284,6 @@ def train():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
-        formatting_func=formatting_func,
     )
 
     # Enable gradient checkpointing for memory efficiency
