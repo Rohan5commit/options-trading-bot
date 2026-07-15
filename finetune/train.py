@@ -266,7 +266,7 @@ def train():
         weight_decay=WEIGHT_DECAY,
         warmup_ratio=WARMUP_RATIO,
         lr_scheduler_type="cosine",
-        fp16=True,
+        bf16=True,
         logging_steps=LOGGING_STEPS,
         save_steps=SAVE_STEPS,
         eval_strategy="steps" if eval_dataset else "no",
