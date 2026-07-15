@@ -276,7 +276,7 @@ def train():
         eval_steps=EVAL_STEPS if eval_dataset else None,
         save_total_limit=3,
         report_to="none",
-        max_seq_length=MAX_SEQ_LENGTH,
+        max_length=MAX_SEQ_LENGTH,
         dataset_text_field=None,
         packing=False,
         resume_from_checkpoint=True,  # Auto-resume from latest checkpoint
