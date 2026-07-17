@@ -82,14 +82,11 @@ def train():
     EVAL_DATA = "/vol/training_data/test.jsonl"
     GPU_PRICE_PER_HR = float(os.environ.get("GPU_PRICE_HR", "1.10"))
     
-    # LoRA configuration
-    LORA_R = 8
-    LORA_ALPHA = 16
-    LORA_DROPOUT = 0.1
-    TARGET_MODULES = [
-        "q_proj", "k_proj", "v_proj", "o_proj",
-        "gate_proj", "up_proj", "down_proj",
-    ]
+    # LoRA configuration (Llama-3-8B)
+    LORA_R = 16
+    LORA_ALPHA = 32
+    LORA_DROPOUT = 0.0
+    TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj"]
 
     # Training hyperparameters
     NUM_EPOCHS = 8
@@ -99,9 +96,9 @@ def train():
     WEIGHT_DECAY = 0.01
     WARMUP_RATIO = 0.1
     MAX_SEQ_LENGTH = 2048
-    LOGGING_STEPS = 50
-    SAVE_STEPS = 1000
-    EVAL_STEPS = 1000
+    LOGGING_STEPS = 10
+    SAVE_STEPS = 200  # ~10 min between checkpoints
+    EVAL_STEPS = 200
 
     print("=== Modal Phase 2 Training ===")
     print(f"GPU: A10G at ${GPU_PRICE_PER_HR}/hr")
@@ -123,7 +120,7 @@ def train():
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_compute_dtype=torch.bfloat16,  # Match bf16=True in training args
         bnb_4bit_use_double_quant=True,
     )
 

@@ -3,13 +3,17 @@ LoRA fine-tuning script for Llama-3-8B-Instruct on options trading data.
 Uses QLoRA (4-bit quantization) for memory efficiency.
 
 Two-phase training plan:
-- Phase 1: Lightning.ai L4 ($0.48/hr) — $15 budget = 31.25 hours
-- Phase 2: Modal A10G ($1.10/hr) — $30 budget = 27.3 hours
+- Phase 1: Lightning.ai RTXP 6000 ($2.11/hr) — $15 budget
+- Phase 2: Modal A10G ($1.10/hr) — $30 budget
 
-Supports checkpointing for resuming across platforms:
-- Saves checkpoints to HF Hub every 1000 steps
-- Resumes from latest checkpoint on Modal
+Features:
+- Auto batch size detection (targets ~90% GPU utilization)
+- Flash Attention 2 for faster training
+- Sequence packing for higher throughput
+- Checkpoint uploads to HF Hub every ~10 min for crash recovery
+- Auto-resume from latest HF Hub checkpoint
 """
+import gc
 import json
 import logging
 import os
@@ -30,8 +34,11 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
+    TrainerCallback,
 )
 from trl import SFTConfig, SFTTrainer
+
+from auto_batch_size import find_optimal_batch_size
 
 logger = logging.getLogger(__name__)
 
@@ -45,34 +52,102 @@ TRAINING_DATA = os.environ.get("TRAINING_DATA", "./training_data/train.jsonl")
 EVAL_DATA = os.environ.get("EVAL_DATA", "./training_data/test.jsonl")
 
 # Cost tracking
-GPU_PRICE_PER_HR = float(os.environ.get("GPU_PRICE_HR", "0.48"))  # L4 on Lightning
+GPU_PRICE_PER_HR = float(os.environ.get("GPU_PRICE_HR", "2.11"))  # RTXP 6000 interruptible
 TRAINING_BUDGET = float(os.environ.get("TRAINING_BUDGET", "15.0"))  # Phase 1 budget
 
-# LoRA configuration
-LORA_R = 8
-LORA_ALPHA = 16
-LORA_DROPOUT = 0.1
-TARGET_MODULES = [
-    "q_proj", "k_proj", "v_proj", "o_proj",
-    "gate_proj", "up_proj", "down_proj",
-]
+# LoRA configuration (Llama-3-8B)
+LORA_R = 16
+LORA_ALPHA = 32
+LORA_DROPOUT = 0.0  # 0 is optimized in PEFT
+TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj"]
 
 # Training hyperparameters
-# 160K examples × 8 epochs on L4 ($0.48/hr) ≈ 67 hours ≈ $32
-# Phase 1 (Lightning): 31.25 hrs → ~3.75 epochs
-# Phase 2 (Modal): 27.3 hrs → ~4.25 epochs
-# Total: 8 epochs
 NUM_EPOCHS = 8
-PER_DEVICE_BATCH_SIZE = 2
-GRADIENT_ACCUMULATION_STEPS = 8  # effective batch = 16
+# Batch size is auto-detected — these are fallback defaults
+PER_DEVICE_BATCH_SIZE = 4
+GRADIENT_ACCUMULATION_STEPS = 16
 LEARNING_RATE = 2e-4
 WEIGHT_DECAY = 0.01
 WARMUP_RATIO = 0.1
 MAX_SEQ_LENGTH = 2048
-LOGGING_STEPS = 50
-SAVE_STEPS = 100
-EVAL_STEPS = 100
+LOGGING_STEPS = 10
+SAVE_STEPS = 200  # ~10 min between checkpoints
+EVAL_STEPS = 200
+TARGET_EFFECTIVE_BATCH_SIZE = 64
 
+
+# ── Hub Upload Callback ────────────────────────────────────────────────────────
+
+class HubUploadCallback(TrainerCallback):
+    """Upload checkpoints to HF Hub after each save for crash recovery."""
+
+    def __init__(self, output_dir: str, hf_repo: str, gpu_price_per_hr: float):
+        self.output_dir = output_dir
+        self.hf_repo = hf_repo
+        self.gpu_price_per_hr = gpu_price_per_hr
+        self.start_time = None
+        self.cost = 0.0
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        self.start_time = datetime.utcnow()
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        """Track cost from logged metrics."""
+        if self.start_time and state.global_step > 0:
+            elapsed = (datetime.utcnow() - self.start_time).total_seconds() / 3600
+            self.cost = elapsed * self.gpu_price_per_hr
+
+    def on_save(self, args, state, control, **kwargs):
+        """Upload checkpoint to HF Hub after each save."""
+        step = state.global_step
+        epoch = state.epoch if state.epoch else 0.0
+
+        if self.start_time:
+            elapsed = (datetime.utcnow() - self.start_time).total_seconds() / 3600
+            self.cost = elapsed * self.gpu_price_per_hr
+
+        logger.info("Uploading checkpoint-%d to HF Hub (step %d, epoch %.2f, cost $%.2f)...",
+                     step, step, epoch, self.cost)
+
+        try:
+            api = HfApi(token=HF_TOKEN)
+            api.create_repo(repo_id=self.hf_repo, exist_ok=True, private=True)
+
+            # Upload checkpoint folder
+            checkpoint_path = Path(self.output_dir) / f"checkpoint-{step}"
+            if checkpoint_path.exists():
+                api.upload_folder(
+                    folder_path=str(checkpoint_path),
+                    repo_id=self.hf_repo,
+                    path_in_repo=f"checkpoint-{step}",
+                )
+                logger.info("Uploaded checkpoint-%d to %s", step, self.hf_repo)
+
+            # Save and upload metadata
+            metadata = {
+                "last_step": step,
+                "last_epoch": epoch,
+                "total_cost_usd": round(self.cost, 2),
+                "gpu_price_per_hr": self.gpu_price_per_hr,
+                "gpu": os.environ.get("GPU_NAME", "unknown"),
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+            metadata_path = Path(self.output_dir) / "training_metadata.json"
+            with open(metadata_path, "w") as f:
+                json.dump(metadata, f, indent=2)
+
+            api.upload_file(
+                path_or_fileobj=str(metadata_path),
+                repo_id=self.hf_repo,
+                path_in_repo="training_metadata.json",
+            )
+            logger.info("Saved training metadata to Hub")
+
+        except Exception as e:
+            logger.error("Failed to upload checkpoint to Hub: %s", e)
+
+
+# ── Helper Functions ───────────────────────────────────────────────────────────
 
 def load_and_format_dataset(path: str) -> list[dict[str, str]]:
     """Load JSONL dataset and format for instruction tuning."""
@@ -127,48 +202,6 @@ def find_latest_checkpoint(output_dir: str, hf_repo: str | None = None) -> str |
     return None
 
 
-def save_checkpoint_to_hub(output_dir: str, hf_repo: str, step: int, epoch: float, cost: float) -> None:
-    """Push checkpoint to HF Hub for persistence across platforms."""
-    if not HF_TOKEN:
-        logger.warning("No HF_TOKEN, skipping Hub upload")
-        return
-
-    try:
-        api = HfApi(token=HF_TOKEN)
-        api.create_repo(repo_id=hf_repo, exist_ok=True, private=True)
-
-        # Upload checkpoint files
-        checkpoint_path = Path(output_dir) / f"checkpoint-{step}"
-        if checkpoint_path.exists():
-            api.upload_folder(
-                folder_path=str(checkpoint_path),
-                repo_id=hf_repo,
-                path_in_repo=f"checkpoint-{step}",
-            )
-            logger.info("Uploaded checkpoint-%d to %s", step, hf_repo)
-
-        # Save metadata
-        metadata = {
-            "last_step": step,
-            "last_epoch": epoch,
-            "total_cost_usd": cost,
-            "gpu_price_per_hr": GPU_PRICE_PER_HR,
-            "timestamp": datetime.utcnow().isoformat(),
-        }
-        metadata_path = Path(output_dir) / "training_metadata.json"
-        with open(metadata_path, "w") as f:
-            json.dump(metadata, f, indent=2)
-
-        api.upload_file(
-            path_or_fileobj=str(metadata_path),
-            repo_id=hf_repo,
-            path_in_repo="training_metadata.json",
-        )
-        logger.info("Saved training metadata to Hub")
-    except Exception as e:
-        logger.error("Failed to upload checkpoint to Hub: %s", e)
-
-
 def upload_startup_marker():
     """Upload a startup marker to HF Hub so we can verify training started."""
     if not HF_TOKEN or not HF_REPO:
@@ -187,8 +220,10 @@ def upload_startup_marker():
         logger.warning("Could not upload startup marker: %s", e)
 
 
+# ── Main Training Function ─────────────────────────────────────────────────────
+
 def train():
-    """Main training function."""
+    """Main training function with GPU-optimized settings."""
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     upload_startup_marker()
 
@@ -205,7 +240,7 @@ def train():
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_compute_dtype=torch.bfloat16,  # Match bf16=True in training args
         bnb_4bit_use_double_quant=True,
     )
 
@@ -215,11 +250,13 @@ def train():
         device_map="auto",
         trust_remote_code=True,
         token=HF_TOKEN or None,
+        attn_implementation="flash_attention_2",  # Enable Flash Attention 2
     )
 
     model = prepare_model_for_kbit_training(model)
 
-    logger.info("Applying LoRA configuration")
+    logger.info("Applying LoRA configuration: r=%d, alpha=%d, modules=%s",
+                LORA_R, LORA_ALPHA, TARGET_MODULES)
     peft_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
         inference_mode=False,
@@ -256,17 +293,43 @@ def train():
     train_dataset = Dataset.from_dict({"text": train_texts})
     eval_dataset = Dataset.from_dict({"text": eval_texts}) if eval_texts else None
 
-    # Training arguments
+    # ── Auto-detect optimal batch size ─────────────────────────────────────────
+    logger.info("Auto-detecting optimal batch size for ~90%% GPU utilization...")
+    batch_rec = find_optimal_batch_size(
+        model=model,
+        tokenizer=tokenizer,
+        max_seq_length=MAX_SEQ_LENGTH,
+        target_effective_batch_size=TARGET_EFFECTIVE_BATCH_SIZE,
+        target_utilization=0.9,
+        use_gradient_checkpointing=True,
+        lora_rank=LORA_R,
+        num_target_modules=len(TARGET_MODULES),
+    )
+
+    per_device_bs = batch_rec.per_device_batch_size
+    grad_accum = batch_rec.gradient_accumulation_steps
+
+    logger.info("=" * 60)
+    logger.info("GPU: %s (%.1f GB)", batch_rec.gpu_name, batch_rec.total_vram_gb)
+    logger.info("Auto-detected: batch_size=%d, grad_accum=%d, effective_bs=%d",
+                per_device_bs, grad_accum, batch_rec.effective_batch_size)
+    logger.info("Estimated utilization: %.1f%%", batch_rec.estimated_utilization * 100)
+    logger.info("Static memory: %.2f GB", batch_rec.static_memory_gb)
+    logger.info("Activation per sample: %.4f GB", batch_rec.activation_per_sample_gb)
+    logger.info("=" * 60)
+
+    # ── Training arguments (GPU-optimized) ─────────────────────────────────────
     training_args = SFTConfig(
         output_dir=OUTPUT_DIR,
         num_train_epochs=NUM_EPOCHS,
-        per_device_train_batch_size=PER_DEVICE_BATCH_SIZE,
-        gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
+        per_device_train_batch_size=per_device_bs,
+        gradient_accumulation_steps=grad_accum,
         learning_rate=LEARNING_RATE,
         weight_decay=WEIGHT_DECAY,
         warmup_ratio=WARMUP_RATIO,
         lr_scheduler_type="cosine",
         bf16=True,
+        optim="paged_adamw_8bit",  # 8-bit paged optimizer saves ~4GB VRAM
         logging_steps=LOGGING_STEPS,
         save_steps=SAVE_STEPS,
         eval_strategy="steps" if eval_dataset else "no",
@@ -274,8 +337,21 @@ def train():
         save_total_limit=3,
         report_to="none",
         max_length=MAX_SEQ_LENGTH,
-        packing=False,
-        resume_from_checkpoint=True,  # Auto-resume from latest checkpoint
+        packing=True,  # Enable sequence packing (requires FA2)
+        gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
+        dataloader_num_workers=4,
+        dataloader_pin_memory=True,
+        dataloader_persistent_workers=True,
+        resume_from_checkpoint=True,
+        use_liger_kernel=True,  # Fused Triton kernels for 10-20% speedup
+    )
+
+    # ── Hub upload callback ─────────────────────────────────────────────────────
+    hub_callback = HubUploadCallback(
+        output_dir=OUTPUT_DIR,
+        hf_repo=HF_REPO,
+        gpu_price_per_hr=GPU_PRICE_PER_HR,
     )
 
     trainer = SFTTrainer(
@@ -284,11 +360,8 @@ def train():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
+        callbacks=[hub_callback],
     )
-
-    # Enable gradient checkpointing for memory efficiency
-    model.gradient_checkpointing_enable()
-    model.enable_input_require_grads()
 
     # Check for existing checkpoint
     resume_checkpoint = find_latest_checkpoint(OUTPUT_DIR, HF_REPO)
@@ -302,7 +375,7 @@ def train():
             logger.info("Resuming from local checkpoint: %s", resume_checkpoint)
             resume_from = resume_checkpoint
 
-    logger.info("Starting training on %s GPU at $%s/hr", 
+    logger.info("Starting training on %s GPU at $%s/hr",
                 os.environ.get("GPU_NAME", "unknown"), GPU_PRICE_PER_HR)
     start_time = datetime.utcnow()
 
@@ -334,6 +407,10 @@ def train():
             "estimated_cost_usd": round(cost, 2),
             "gpu": os.environ.get("GPU_NAME", "unknown"),
             "gpu_price_per_hr": GPU_PRICE_PER_HR,
+            "batch_size": per_device_bs,
+            "gradient_accumulation": grad_accum,
+            "effective_batch_size": batch_rec.effective_batch_size,
+            "gpu_utilization": batch_rec.estimated_utilization,
         }, f, indent=2)
 
     # Push final adapter to HF Hub
@@ -352,6 +429,9 @@ def train():
 
     logger.info("Training complete! Duration: %.1f hrs, Cost: $%.2f", duration_hours, cost)
     print(f"\nTraining complete!")
+    print(f"GPU: {batch_rec.gpu_name} ({batch_rec.total_vram_gb:.1f} GB)")
+    print(f"Batch size: {per_device_bs} x {grad_accum} = {batch_rec.effective_batch_size} effective")
+    print(f"GPU utilization: {batch_rec.estimated_utilization:.1%}")
     print(f"Duration: {duration_hours:.1f} hours")
     print(f"Estimated cost: ${cost:.2f}")
     print(f"Adapter saved to: {OUTPUT_DIR}")
