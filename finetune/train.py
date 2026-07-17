@@ -48,8 +48,8 @@ BASE_MODEL = os.environ.get("BASE_MODEL_NAME", "meta-llama/Meta-Llama-3-8B-Instr
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 HF_REPO = os.environ.get("HF_CHECKPOINT_REPO", "Rohan556/options-llm-checkpoints")
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "./finetuned_models/options_llm")
-TRAINING_DATA = os.environ.get("TRAINING_DATA", "./training_data/train.jsonl")
-EVAL_DATA = os.environ.get("EVAL_DATA", "./training_data/test.jsonl")
+TRAINING_DATA = os.environ.get("TRAINING_DATA", "./training_data/train_curated.jsonl")
+EVAL_DATA = os.environ.get("EVAL_DATA", "./training_data/test_curated.jsonl")
 
 # Cost tracking
 GPU_PRICE_PER_HR = float(os.environ.get("GPU_PRICE_HR", "2.11"))  # RTXP 6000 interruptible
@@ -61,18 +61,18 @@ LORA_ALPHA = 32
 LORA_DROPOUT = 0.0  # 0 is optimized in PEFT
 TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj"]
 
-# Training hyperparameters
-NUM_EPOCHS = 8
+# Training hyperparameters (optimized for RTXP 6000)
+NUM_EPOCHS = 4
 # Batch size is auto-detected — these are fallback defaults
-PER_DEVICE_BATCH_SIZE = 4
-GRADIENT_ACCUMULATION_STEPS = 16
+PER_DEVICE_BATCH_SIZE = 8
+GRADIENT_ACCUMULATION_STEPS = 8
 LEARNING_RATE = 2e-4
 WEIGHT_DECAY = 0.01
 WARMUP_RATIO = 0.1
-MAX_SEQ_LENGTH = 2048
+MAX_SEQ_LENGTH = 1024
 LOGGING_STEPS = 10
-SAVE_STEPS = 200  # ~10 min between checkpoints
-EVAL_STEPS = 200
+SAVE_STEPS = 50  # checkpoint more often (50 steps = ~11 min)
+EVAL_STEPS = 50
 TARGET_EFFECTIVE_BATCH_SIZE = 64
 
 
@@ -295,27 +295,41 @@ def train():
 
     # ── Auto-detect optimal batch size ─────────────────────────────────────────
     logger.info("Auto-detecting optimal batch size for ~90%% GPU utilization...")
-    batch_rec = find_optimal_batch_size(
-        model=model,
-        tokenizer=tokenizer,
-        max_seq_length=MAX_SEQ_LENGTH,
-        target_effective_batch_size=TARGET_EFFECTIVE_BATCH_SIZE,
-        target_utilization=0.9,
-        use_gradient_checkpointing=True,
-        lora_rank=LORA_R,
-        num_target_modules=len(TARGET_MODULES),
-    )
+    try:
+        batch_rec = find_optimal_batch_size(
+            model=model,
+            tokenizer=tokenizer,
+            max_seq_length=MAX_SEQ_LENGTH,
+            target_effective_batch_size=TARGET_EFFECTIVE_BATCH_SIZE,
+            target_utilization=0.9,
+            use_gradient_checkpointing=True,
+            lora_rank=LORA_R,
+            num_target_modules=len(TARGET_MODULES),
+        )
+        per_device_bs = batch_rec.per_device_batch_size
+        grad_accum = batch_rec.gradient_accumulation_steps
+    except Exception as e:
+        logger.warning("Auto batch size failed (%s), using conservative defaults", e)
+        per_device_bs = PER_DEVICE_BATCH_SIZE
+        grad_accum = GRADIENT_ACCUMULATION_STEPS
 
-    per_device_bs = batch_rec.per_device_batch_size
-    grad_accum = batch_rec.gradient_accumulation_steps
+    # Override if OOM-prone: use conservative batch size for large models with packing
+    total_vram = torch.cuda.get_device_properties(0).total_memory / 1e9
+    if total_vram < 50:
+        max_safe_bs = 2
+    elif total_vram < 80:
+        max_safe_bs = 4
+    else:
+        max_safe_bs = 8
+    if per_device_bs > max_safe_bs:
+        logger.info("Capping batch_size from %d to %d for safety with packing", per_device_bs, max_safe_bs)
+        grad_accum = grad_accum * (per_device_bs // max_safe_bs)
+        per_device_bs = max_safe_bs
 
     logger.info("=" * 60)
-    logger.info("GPU: %s (%.1f GB)", batch_rec.gpu_name, batch_rec.total_vram_gb)
-    logger.info("Auto-detected: batch_size=%d, grad_accum=%d, effective_bs=%d",
-                per_device_bs, grad_accum, batch_rec.effective_batch_size)
-    logger.info("Estimated utilization: %.1f%%", batch_rec.estimated_utilization * 100)
-    logger.info("Static memory: %.2f GB", batch_rec.static_memory_gb)
-    logger.info("Activation per sample: %.4f GB", batch_rec.activation_per_sample_gb)
+    logger.info("GPU: %s (%.1f GB)", torch.cuda.get_device_name(0), total_vram)
+    logger.info("Batch size: batch_size=%d, grad_accum=%d, effective_bs=%d",
+                per_device_bs, grad_accum, per_device_bs * grad_accum)
     logger.info("=" * 60)
 
     # ── Training arguments (GPU-optimized) ─────────────────────────────────────
@@ -409,8 +423,8 @@ def train():
             "gpu_price_per_hr": GPU_PRICE_PER_HR,
             "batch_size": per_device_bs,
             "gradient_accumulation": grad_accum,
-            "effective_batch_size": batch_rec.effective_batch_size,
-            "gpu_utilization": batch_rec.estimated_utilization,
+            "effective_batch_size": per_device_bs * grad_accum,
+            "max_seq_length": MAX_SEQ_LENGTH,
         }, f, indent=2)
 
     # Push final adapter to HF Hub
@@ -427,13 +441,13 @@ def train():
         except Exception as e:
             logger.error("Failed to push to Hub: %s", e)
 
+    eff_bs = per_device_bs * grad_accum
     logger.info("Training complete! Duration: %.1f hrs, Cost: $%.2f", duration_hours, cost)
     print(f"\nTraining complete!")
-    print(f"GPU: {batch_rec.gpu_name} ({batch_rec.total_vram_gb:.1f} GB)")
-    print(f"Batch size: {per_device_bs} x {grad_accum} = {batch_rec.effective_batch_size} effective")
-    print(f"GPU utilization: {batch_rec.estimated_utilization:.1%}")
+    print(f"GPU: {os.environ.get('GPU_NAME', 'unknown')} ({total_vram:.1f} GB)")
+    print(f"Batch size: {per_device_bs} x {grad_accum} = {eff_bs} effective")
     print(f"Duration: {duration_hours:.1f} hours")
-    print(f"Estimated cost: ${cost:.2f}")
+    print(f"Cost: ${cost:.2f}")
     print(f"Adapter saved to: {OUTPUT_DIR}")
     print(f"Hub repo: {HF_REPO}")
 
