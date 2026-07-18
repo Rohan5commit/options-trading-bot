@@ -18,12 +18,12 @@ app = modal.App("options-llm-inference")
 inference_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
+        "packaging",
         "torch>=2.1.0",
         "transformers>=4.36.0",
         "peft>=0.7.0",
         "bitsandbytes>=0.41.0",
         "accelerate>=0.25.0",
-        "flash-attn>=2.3.0",
         "sentencepiece",
         "protobuf",
     )
@@ -33,7 +33,7 @@ inference_image = (
 @app.cls(
     image=inference_image,
     gpu="T4",
-    container_idle_timeout=300,
+    scaledown_window=300,
     timeout=180,
     secrets=[modal.Secret.from_name("huggingface-token")],
 )
@@ -80,7 +80,7 @@ class OptionsLLM:
             device_map="auto",
             trust_remote_code=True,
             token=hf_token or None,
-            attn_implementation="flash_attention_2",
+            attn_implementation="sdpa",
         )
 
         logger.info("Loading LoRA adapter from %s", adapter_repo)
