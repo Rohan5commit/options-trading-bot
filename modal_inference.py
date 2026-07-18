@@ -23,6 +23,7 @@ inference_image = (
         "peft>=0.7.0",
         "bitsandbytes>=0.41.0",
         "accelerate>=0.25.0",
+        "flash-attn>=2.3.0",
         "sentencepiece",
         "protobuf",
     )
@@ -70,7 +71,7 @@ class OptionsLLM:
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_use_double_quant=True,
         )
         base_model = AutoModelForCausalLM.from_pretrained(
@@ -79,6 +80,7 @@ class OptionsLLM:
             device_map="auto",
             trust_remote_code=True,
             token=hf_token or None,
+            attn_implementation="flash_attention_2",
         )
 
         logger.info("Loading LoRA adapter from %s", adapter_repo)
