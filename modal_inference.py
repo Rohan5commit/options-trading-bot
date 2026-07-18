@@ -32,7 +32,7 @@ inference_image = (
 
 @app.cls(
     image=inference_image,
-    gpu="L4",
+    gpu="T4",
     container_idle_timeout=300,
     timeout=180,
     secrets=[modal.Secret.from_name("huggingface-token")],
