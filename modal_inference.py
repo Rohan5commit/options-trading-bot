@@ -120,7 +120,7 @@ class OptionsLLM:
             outputs = self.model.generate(
                 **inputs,
                 max_new_tokens=512,
-                temperature=0.3,
+                temperature=0.2,  # Lower for more consistent outputs
                 top_p=0.9,
                 do_sample=True,
                 pad_token_id=self.tokenizer.eos_token_id,

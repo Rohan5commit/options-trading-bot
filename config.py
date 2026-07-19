@@ -54,7 +54,7 @@ EMAIL_SMTP_PORT: int = 587
 # ── LLM Parameters ────────────────────────────────────────────────────────────
 MIN_CONFIDENCE: float = 0.70
 LLM_MAX_NEW_TOKENS: int = 512  # Synced with modal_inference.py
-LLM_TEMPERATURE: float = 0.3
+LLM_TEMPERATURE: float = 0.2  # Lower for more consistent outputs (research-backed)
 
 # ── Risk Parameters ────────────────────────────────────────────────────────────
 MAX_POSITION_PCT: float = 0.20          # No single position > 20% of equity
