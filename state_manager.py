@@ -38,7 +38,8 @@ def _atomic_write(path: Path, data: dict[str, Any]) -> None:
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    """Read JSON from a file, returning an empty dict if the file is missing."""
+    """Read JSON from a file, returning an empty dict if the file is missing.
+    Backs up corrupted files before overwriting (fix #20)."""
     if not path.exists():
         return {}
     try:
@@ -46,6 +47,14 @@ def _read_json(path: Path) -> dict[str, Any]:
             return json.load(f)
     except (json.JSONDecodeError, OSError) as exc:
         logger.error("Failed to read %s: %s", path, exc)
+        # Backup corrupted file before it gets overwritten
+        try:
+            backup_path = path.with_suffix(f".corrupted.{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json")
+            import shutil
+            shutil.copy2(path, backup_path)
+            logger.info("Backed up corrupted file to %s", backup_path)
+        except Exception as backup_exc:
+            logger.warning("Failed to backup corrupted file: %s", backup_exc)
         return {}
 
 

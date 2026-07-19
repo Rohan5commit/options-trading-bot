@@ -180,8 +180,8 @@ def send_daily_summary() -> bool:
         msg["To"] = config.EMAIL_RECIPIENT
         msg.attach(MIMEText(html_body, "html"))
 
-        # Send via Gmail SMTP
-        with smtplib.SMTP(config.EMAIL_SMTP_HOST, config.EMAIL_SMTP_PORT) as server:
+        # Send via Gmail SMTP with timeout (fix #19)
+        with smtplib.SMTP(config.EMAIL_SMTP_HOST, config.EMAIL_SMTP_PORT, timeout=30) as server:
             server.ehlo()
             server.starttls()
             server.ehlo()

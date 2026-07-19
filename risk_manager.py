@@ -49,7 +49,7 @@ def _check_daily_loss_limit() -> bool:
     unrealized = entry.get("unrealized_pnl", 0)
     total_pnl_pct = (realized + unrealized) / equity if equity > 0 else 0
 
-    if total_pnl_pct < config.DAILY_LOSS_LIMIT_PCT:
+    if total_pnl_pct <= config.DAILY_LOSS_LIMIT_PCT:
         logger.warning(
             "Daily loss limit breached: %.2f%% (limit: %.2f%%)",
             total_pnl_pct * 100, config.DAILY_LOSS_LIMIT_PCT * 100,
@@ -69,6 +69,7 @@ def _check_position_sizing(decision: dict[str, Any], equity: float) -> str | Non
     """
     Validate that the proposed position size is within limits.
     Returns rejection reason or None if OK.
+    Uses abs() for credit strategies (fix #4).
     """
     if equity <= 0:
         return "Cannot determine account equity"
@@ -78,15 +79,18 @@ def _check_position_sizing(decision: dict[str, Any], equity: float) -> str | Non
     for leg in decision.get("legs", []):
         mid = leg.get("mid", 0)
         qty = leg.get("quantity", 1)
+        if mid <= 0:
+            continue  # Skip legs with no price data
         if leg.get("side") == "buy":
             total_cost += mid * qty * 100  # options multiplier = 100
         else:
             total_cost -= mid * qty * 100
 
+    # Use abs() for credit strategies (fix #4)
     max_allowed = equity * config.MAX_POSITION_PCT
-    if total_cost > max_allowed:
+    if abs(total_cost) > max_allowed:
         return (
-            f"Position size ${total_cost:.0f} exceeds {config.MAX_POSITION_PCT*100:.0f}% "
+            f"Position size ${abs(total_cost):.0f} exceeds {config.MAX_POSITION_PCT*100:.0f}% "
             f"limit (${max_allowed:.0f}) of equity ${equity:.0f}"
         )
     return None
@@ -128,35 +132,41 @@ def validate(decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Validate a list of LLM trade decisions against all risk rules.
     Returns only the decisions that pass all checks.
+    HOLD decisions always pass through (fix #3).
     """
     rejections: list[RiskRejection] = []
     approved: list[dict[str, Any]] = []
 
-    # Global checks
+    # Separate HOLD from actionable decisions
+    hold_decisions = [d for d in decisions if d.get("action") == "HOLD"]
+    actionable = [d for d in decisions if d.get("action") != "HOLD"]
+
+    # HOLD decisions always pass through
+    approved.extend(hold_decisions)
+
+    if not actionable:
+        return approved
+
+    # Global checks — only apply to actionable decisions
     daily_loss_halted = _check_daily_loss_limit()
     if daily_loss_halted:
         logger.warning("Daily loss limit reached — rejecting ALL new trades")
-        for d in decisions:
+        for d in actionable:
             rejections.append(RiskRejection(d, "Daily loss limit breached — all trades halted"))
         _log_rejections(rejections)
-        return []
+        return approved
 
     at_position_limit = _check_position_limit()
     if at_position_limit:
         logger.warning("Max open positions reached — rejecting ALL new trades")
-        for d in decisions:
+        for d in actionable:
             rejections.append(RiskRejection(d, f"Max {config.MAX_OPEN_POSITIONS} open positions reached"))
         _log_rejections(rejections)
-        return []
+        return approved
 
     equity = data_fetcher.get_account_equity()
 
-    for decision in decisions:
-        # HOLD decisions pass through
-        if decision.get("action") == "HOLD":
-            approved.append(decision)
-            continue
-
+    for decision in actionable:
         # Position sizing check
         sizing_rejection = _check_position_sizing(decision, equity)
         if sizing_rejection:
@@ -174,8 +184,8 @@ def validate(decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
         approved.append(decision)
         logger.info(
             "Approved: %s %s on %s (confidence: %.2f)",
-            decision["action"], decision["strategy"],
-            decision["underlying"], decision.get("confidence", 0),
+            decision.get("action", ""), decision.get("strategy", ""),
+            decision.get("underlying", ""), decision.get("confidence", 0),
         )
 
     _log_rejections(rejections)

@@ -40,18 +40,23 @@ def run_pipeline() -> None:
     logger.info("Time: %s", start_time.isoformat())
     logger.info("=" * 60)
 
-    # Create today's log entry
-    entry = state_manager.create_today_entry()
+    # Get or create today's log entry (fix #5: don't wipe on re-run)
+    entry = state_manager.get_today_entry()
+    if entry is None:
+        entry = state_manager.create_today_entry()
+        state_manager.save_today_entry(entry)
 
-    # Record starting equity
-    try:
-        equity = data_fetcher.get_account_equity()
-        entry["account_equity"] = equity
-    except Exception as exc:
-        logger.error("Failed to fetch starting equity: %s", exc)
-        equity = 0.0
-
-    state_manager.save_today_entry(entry)
+    # Record starting equity (only if not already set)
+    if entry.get("account_equity", 0) <= 0:
+        try:
+            equity = data_fetcher.get_account_equity()
+            entry["account_equity"] = equity
+            state_manager.save_today_entry(entry)
+        except Exception as exc:
+            logger.error("Failed to fetch starting equity: %s", exc)
+            equity = 0.0
+    else:
+        equity = entry["account_equity"]
 
     # ── Step 1: Check exits on existing positions ──────────────────────────
     logger.info("\n--- Step 1: Checking exits on open positions ---")

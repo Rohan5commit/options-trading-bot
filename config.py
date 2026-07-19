@@ -21,9 +21,9 @@ ALPACA_DATA_URL: str = "https://data.alpaca.markets"
 # ── Modal (inference + Phase 2 training) ──────────────────────────────────────
 MODAL_TOKEN_ID: str = os.environ.get("MODAL_TOKEN_ID", "")
 MODAL_TOKEN_SECRET: str = os.environ.get("MODAL_TOKEN_SECRET", "")
-MODAL_GPU_TYPE: str = "A10G"
-MODAL_INFERENCE_TIMEOUT: int = 120
-MODAL_TRAINING_GPU_PRICE: float = 1.10  # A10G at $1.10/hr
+MODAL_GPU_TYPE: str = "L4"  # Synced with modal_inference.py
+MODAL_INFERENCE_TIMEOUT: int = 180  # Synced with modal_inference.py timeout
+MODAL_TRAINING_GPU_PRICE: float = 1.10  # L4 at $1.10/hr
 
 # ── Lightning.ai (Phase 1 training) ───────────────────────────────────────────
 LIGHTNING_GPU: str = "L4"
@@ -53,7 +53,7 @@ EMAIL_SMTP_PORT: int = 587
 
 # ── LLM Parameters ────────────────────────────────────────────────────────────
 MIN_CONFIDENCE: float = 0.70
-LLM_MAX_NEW_TOKENS: int = 1024
+LLM_MAX_NEW_TOKENS: int = 512  # Synced with modal_inference.py
 LLM_TEMPERATURE: float = 0.3
 
 # ── Risk Parameters ────────────────────────────────────────────────────────────
@@ -63,11 +63,12 @@ DAILY_LOSS_LIMIT_PCT: float = -0.15     # Halt if daily P&L < -15%
 MAX_BID_ASK_SPREAD_PCT: float = 0.10    # Reject contracts with spread > 10%
 MIN_OPEN_INTEREST: int = 100            # Reject contracts with OI < 100
 HARD_EXIT_LOSS_PCT: float = 1.0         # Close if loss > 100% of debit paid
-DTE_EXIT_THRESHOLD: int = 1             # Close any position at 1 DTE
+DTE_EXIT_THRESHOLD: int = 3             # Close any position at 3 DTE
 
 # ── Trading Parameters ─────────────────────────────────────────────────────────
-MIN_DTE: int = 7
+MIN_DTE: int = 3                        # Minimum DTE to open a position (fix #21)
 MAX_DTE: int = 45
+MAX_CONTRACTS_PER_SYMBOL: int = 15      # Max contracts sent to LLM per symbol
 PROFIT_TARGET_PCT: float = 0.50         # Close if profit > 50% of debit
 
 # ── Watchlist ──────────────────────────────────────────────────────────────────

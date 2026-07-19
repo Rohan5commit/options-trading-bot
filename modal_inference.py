@@ -32,7 +32,7 @@ inference_image = (
 
 @app.cls(
     image=inference_image,
-    gpu="T4",
+    gpu="L4",
     scaledown_window=300,
     timeout=180,
     secrets=[modal.Secret.from_name("huggingface-token")],
@@ -116,10 +116,10 @@ class OptionsLLM:
         )
         inputs = self.tokenizer(input_text, return_tensors="pt").to(self.model.device)
 
-        with torch.no_grad():
+        with torch.inference_mode():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=1024,
+                max_new_tokens=512,
                 temperature=0.3,
                 top_p=0.9,
                 do_sample=True,

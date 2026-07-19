@@ -2,7 +2,6 @@
 Position Monitor. Checks all open positions daily and closes based on
 hard rules and LLM exit recommendations.
 """
-import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -25,13 +24,35 @@ def _calculate_dte(expiration: str) -> int:
         return 999
 
 
+def _compute_net_position_value(pos: dict[str, Any], leg_prices: dict[str, float]) -> float:
+    """
+    Compute the net value of a multi-leg position.
+    For debit spreads: net = sum(buy_prices) - sum(sell_prices)
+    For credit spreads: net = sum(sell_prices) - sum(buy_prices)
+    """
+    net = 0.0
+    for leg in pos.get("legs", []):
+        sym = leg.get("symbol", "")
+        price = leg_prices.get(sym, 0)
+        qty = leg.get("quantity", 1)
+        if leg.get("side") == "buy":
+            net += price * qty
+        else:
+            net -= price * qty
+    return net
+
+
 def _check_hard_exit(position: dict[str, Any]) -> tuple[bool, str]:
     """
     Check if a position should be force-closed due to hard rules.
     Returns (should_exit, reason).
     """
-    # DTE exit: close at 1 DTE regardless of P&L
-    for leg in position.get("legs", []):
+    legs = position.get("legs", [])
+    if not legs:
+        return False, ""
+
+    # DTE exit: close at threshold DTE regardless of P&L
+    for leg in legs:
         dte = _calculate_dte(leg.get("expiration", ""))
         if dte <= config.DTE_EXIT_THRESHOLD:
             return True, f"DTE {dte} <= threshold {config.DTE_EXIT_THRESHOLD}"
@@ -50,24 +71,28 @@ def _check_hard_exit(position: dict[str, Any]) -> tuple[bool, str]:
                 f"of debit paid (${debit_paid:.0f})"
             )
 
+    # Profit target exit: close if profit > PROFIT_TARGET_PCT of debit paid
+    if entry_price > 0:
+        profit = current_value - debit_paid
+        if profit >= debit_paid * config.PROFIT_TARGET_PCT:
+            return True, (
+                f"Profit ${profit:.0f} >= {config.PROFIT_TARGET_PCT*100:.0f}% "
+                f"of debit paid (${debit_paid:.0f})"
+            )
+
     return False, ""
 
 
 def _get_current_price_for_contract(contract_symbol: str) -> float:
     """Fetch the current mid price for an option contract."""
     try:
-        url = f"https://data.alpaca.markets/v1beta1/options/snapshots/{contract_symbol.split('.')[0]}"
-        # Use Alpaca data API to get latest quote
+        import requests
         headers = {
             "APCA-API-KEY-ID": config.ALPACA_API_KEY,
             "APCA-API-SECRET-KEY": config.ALPACA_SECRET_KEY,
         }
-        import requests
-        # Try to get the snapshot for the specific contract
-        # The contract symbol format is like AAPL250221C00190000
-        # We need the underlying to build the URL
         underlying = "".join(c for c in contract_symbol if c.isalpha())
-        url = f"https://data.alpaca.markets/v1beta1/options/snapshots/{underlying}"
+        url = f"{config.ALPACA_DATA_URL}/v1beta1/options/snapshots/{underlying}"
         resp = requests.get(url, headers=headers, params={"feed": "indicative"}, timeout=30)
         resp.raise_for_status()
         snapshots = resp.json().get("snapshots", {})
@@ -98,22 +123,31 @@ def check_exits() -> list[dict[str, Any]]:
     for pos in positions:
         position_id = pos.get("id", "")
         underlying = pos.get("underlying", "")
+        legs = pos.get("legs", [])
 
-        # Update current price for each leg
-        for leg in pos.get("legs", []):
+        if not legs:
+            logger.warning("Position %s has no legs, skipping", position_id)
+            continue
+
+        # Fetch current price for each leg
+        leg_prices: dict[str, float] = {}
+        for leg in legs:
             contract_sym = leg.get("symbol", "")
             if contract_sym:
-                current_price = _get_current_price_for_contract(contract_sym)
-                if current_price > 0:
-                    pos["current_price"] = current_price
+                price = _get_current_price_for_contract(contract_sym)
+                if price > 0:
+                    leg_prices[contract_sym] = price
+
+        # Compute net position value from all legs
+        net_value = _compute_net_position_value(pos, leg_prices)
+        pos["current_price"] = net_value
 
         # Calculate unrealized P&L
         entry_price = pos.get("entry_price", 0)
-        current_price = pos.get("current_price", entry_price)
         quantity = pos.get("quantity", 1)
         if entry_price > 0:
             pos["unrealized_pnl"] = round(
-                (current_price - entry_price) * quantity * 100, 2
+                (net_value - entry_price) * quantity * 100, 2
             )
 
         # Check hard exit rules
@@ -123,52 +157,60 @@ def check_exits() -> list[dict[str, Any]]:
                 "Hard exit triggered for %s: %s", position_id, reason
             )
             try:
-                # Close the position
-                for leg in pos.get("legs", []):
+                # Save daily entry BEFORE removing position (fix #14)
+                entry = state_manager.get_today_entry()
+                if entry is None:
+                    entry = state_manager.create_today_entry()
+
+                # Close all legs (not just buy legs) (fix #2)
+                for leg in legs:
                     contract_sym = leg.get("symbol", "")
-                    if contract_sym and leg.get("side") == "buy":
-                        executor.close_position(contract_sym)
+                    if contract_sym:
+                        try:
+                            executor.close_position(contract_sym)
+                        except Exception as exc:
+                            logger.error("Failed to close leg %s: %s", contract_sym, exc)
 
                 # Record closed position
                 closed_positions.append({
                     **pos,
                     "exit_reason": reason,
                     "exit_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-                    "exit_price": current_price,
+                    "exit_price": net_value,
                     "realized_pnl": pos.get("unrealized_pnl", 0),
                 })
-                state_manager.remove_position(position_id)
 
-                # Update daily log
-                entry = state_manager.get_today_entry()
-                if entry is None:
-                    entry = state_manager.create_today_entry()
+                # Update daily log BEFORE removing position
                 entry["trades_closed"].append({
                     "symbol": underlying,
                     "strategy": pos.get("strategy", ""),
                     "entry_price": entry_price,
-                    "exit_price": current_price,
+                    "exit_price": net_value,
                     "realized_pnl": pos.get("unrealized_pnl", 0),
                     "reason": reason,
                 })
                 entry["realized_pnl"] += pos.get("unrealized_pnl", 0)
                 state_manager.save_today_entry(entry)
 
+                # NOW remove from state
+                state_manager.remove_position(position_id)
+
             except Exception as exc:
                 logger.error("Failed to close position %s: %s", position_id, exc)
         else:
+            # Compute min DTE safely (fix #13)
+            dte_values = [_calculate_dte(leg.get("expiration", "")) for leg in legs]
+            min_dte = min(dte_values) if dte_values else 999
+
             # Add to exit recommendations for LLM evaluation
             exit_recommendations.append({
                 "id": position_id,
                 "underlying": underlying,
                 "strategy": pos.get("strategy", ""),
                 "entry_price": entry_price,
-                "current_price": current_price,
+                "current_price": net_value,
                 "unrealized_pnl": pos.get("unrealized_pnl", 0),
-                "dte": min(
-                    _calculate_dte(leg.get("expiration", ""))
-                    for leg in pos.get("legs", [])
-                ),
+                "dte": min_dte,
                 "llm_reasoning": pos.get("llm_reasoning", ""),
             })
 

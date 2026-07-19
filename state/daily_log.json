@@ -1,3 +1,26 @@
 {
-  "daily_summary": []
+  "daily_summary": [
+    {
+      "date": "2026-07-18",
+      "trades_opened": [],
+      "trades_closed": [],
+      "realized_pnl": 0.0,
+      "unrealized_pnl": 0,
+      "total_pnl": 0.0,
+      "risk_rejections": [],
+      "llm_confidence_scores": [],
+      "account_equity": 100000.0
+    },
+    {
+      "date": "2026-07-19",
+      "trades_opened": [],
+      "trades_closed": [],
+      "realized_pnl": 0.0,
+      "unrealized_pnl": 0,
+      "total_pnl": 0.0,
+      "risk_rejections": [],
+      "llm_confidence_scores": [],
+      "account_equity": 100000.0
+    }
+  ]
 }

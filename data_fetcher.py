@@ -2,7 +2,9 @@
 Data pipeline: fetches options chains, Greeks, price action, IV, earnings, and news.
 Combines Alpaca API, yfinance, and Polygon.io free tier.
 """
+import functools
 import logging
+import math
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -23,6 +25,7 @@ def _retry(max_retries: int = 3, backoff_factor: float = 1.0):
     """Exponential-backoff retry decorator for network calls."""
 
     def decorator(func):
+        @functools.wraps(func)
         def wrapper(*args, **kwargs):
             last_exc: Exception | None = None
             for attempt in range(1, max_retries + 1):
@@ -138,7 +141,9 @@ def _compute_rsi(prices: pd.Series, period: int = 14) -> float:
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
     val = rsi.iloc[-1]
-    return float(val) if pd.notna(val) else 50.0
+    if pd.isna(val) or not math.isfinite(val):
+        return 50.0
+    return float(val)
 
 
 def _compute_macd(prices: pd.Series) -> dict[str, float]:
@@ -206,27 +211,26 @@ def _fetch_iv_history_polygon(underlying: str, days: int = 30) -> list[dict[str,
 
 def _compute_iv_metrics(chain: list[dict[str, Any]]) -> dict[str, float]:
     """
-    Compute current IV, IV rank, and IV percentile from the option chain.
-    IV rank = (current_iv - min_iv) / (max_iv - min_iv)
-    IV percentile = % of days IV was below current_iv
+    Compute current IV from the option chain.
+    IV rank and percentile are not computed cross-sectionally (meaningless).
+    Instead, report current IV and the IV range across strikes.
     """
     ivs = [c.get("implied_volatility", 0) for c in chain if c.get("implied_volatility", 0) > 0]
     if not ivs:
-        return {"current_iv": 0, "iv_rank": 0, "iv_percentile": 0, "historical_vol": 0}
+        return {"current_iv": 0, "iv_rank": 0, "iv_percentile": 0}
 
     current_iv = float(np.mean(ivs))
     min_iv = float(np.min(ivs))
     max_iv = float(np.max(ivs))
+
+    # Report IV as percentile within the current range (not historical)
     iv_range = max_iv - min_iv
     iv_rank = (current_iv - min_iv) / iv_range if iv_range > 0 else 0.5
-    below = sum(1 for v in ivs if v <= current_iv)
-    iv_percentile = below / len(ivs)
 
     return {
         "current_iv": round(current_iv, 4),
         "iv_rank": round(min(max(iv_rank, 0), 1), 4),
-        "iv_percentile": round(min(max(iv_percentile, 0), 1), 4),
-        "historical_vol": round(current_iv * 0.85, 4),  # rough proxy
+        "iv_percentile": round(min(max(iv_rank, 0), 1), 4),
     }
 
 
@@ -252,8 +256,11 @@ def _fetch_earnings_yfinance(symbol: str) -> dict[str, str]:
     try:
         ticker = yf.Ticker(symbol)
         cal = ticker.calendar
-        if cal is not None and len(cal) > 0:
+        if cal is not None and hasattr(cal, 'iloc') and len(cal) > 0:
             earnings_date = str(cal.iloc[0].get("Earnings Date", ""))
+            return {"earnings_date": earnings_date}
+        elif cal is not None and isinstance(cal, dict) and "Earnings Date" in cal:
+            earnings_date = str(cal["Earnings Date"])
             return {"earnings_date": earnings_date}
     except Exception as exc:
         logger.warning("Earnings fetch failed for %s: %s", symbol, exc)
@@ -261,6 +268,35 @@ def _fetch_earnings_yfinance(symbol: str) -> dict[str, str]:
 
 
 # ── Build full market context ──────────────────────────────────────────────────
+
+
+def _filter_contracts(contracts: list[dict], underlying_price: float) -> list[dict]:
+    """Filter to the most relevant contracts: ATM ± 10 strikes, limit to MAX_CONTRACTS."""
+    today = datetime.now(timezone.utc).date()
+    filtered = []
+    for c in contracts:
+        exp_str = c.get("expiration_date", "")
+        if not exp_str:
+            continue
+        try:
+            exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        dte = (exp_date - today).days
+        if dte < config.MIN_DTE or dte > config.MAX_DTE:
+            continue
+        strike = float(c.get("strike_price", 0))
+        if underlying_price > 0:
+            c["_strike_dist"] = abs(strike - underlying_price)
+        else:
+            c["_strike_dist"] = 0
+        c["_dte"] = dte
+        filtered.append(c)
+
+    filtered.sort(key=lambda x: (x["_dte"], x["_strike_dist"]))
+
+    max_contracts = config.MAX_CONTRACTS_PER_SYMBOL
+    return filtered[:max_contracts]
 
 
 def _get_contract_details(contracts: list[dict], chain: list[dict]) -> dict[str, list[dict]]:
@@ -300,7 +336,7 @@ def _get_contract_details(contracts: list[dict], chain: list[dict]) -> dict[str,
             "strike": float(contract.get("strike_price", 0)),
             "expiration": exp_str,
             "dte": dte,
-            "open_interest": int(contract.get("open_interest", 0)),
+            "open_interest": int(contract.get("open_interest") or 0),
             "bid": bid,
             "ask": ask,
             "mid": round(mid, 2),
@@ -322,22 +358,19 @@ def _get_contract_details(contracts: list[dict], chain: list[dict]) -> dict[str,
     return {"calls": sorted(calls, key=lambda x: x["strike"]), "puts": sorted(puts, key=lambda x: x["strike"])}
 
 
-def build_context_for_symbol(symbol: str) -> dict[str, Any]:
+def build_context_for_symbol(symbol: str) -> dict[str, Any] | None:
     """
     Build complete market context for a single symbol.
-    Returns a structured JSON-ready dict for the LLM.
+    Returns None if price data is unavailable (fix #8).
     """
     logger.info("Building context for %s", symbol)
 
-    # Fetch option chain from Alpaca
-    contracts = _fetch_option_contracts_alpaca(symbol)
-    chain = _fetch_option_chain_alpaca(symbol)
-    options_chain = _get_contract_details(contracts, chain)
-
-    # IV metrics
-    iv_metrics = _compute_iv_metrics(chain)
-
-    # Stock price and technical indicators
+    # Stock price and technical indicators (needed first for ATM filtering)
+    latest_price = 0
+    avg_volume = 0
+    rsi = 50.0
+    macd = {"macd": 0, "signal": 0, "histogram": 0}
+    bollinger = {"upper": 0, "middle": 0, "lower": 0}
     try:
         ticker = yf.Ticker(symbol)
         hist = ticker.history(period="1mo", interval="1d")
@@ -353,11 +386,20 @@ def build_context_for_symbol(symbol: str) -> dict[str, Any]:
         bollinger = _compute_bollinger(close)
     except Exception as exc:
         logger.warning("Price data failed for %s: %s", symbol, exc)
-        latest_price = 0
-        avg_volume = 0
-        rsi = 50.0
-        macd = {"macd": 0, "signal": 0, "histogram": 0}
-        bollinger = {"upper": 0, "middle": 0, "lower": 0}
+
+    # Skip symbols with no price data (fix #8)
+    if latest_price <= 0:
+        logger.warning("No valid price for %s, skipping", symbol)
+        return None
+
+    # Fetch option chain from Alpaca, filter to ATM ± 10 strikes
+    contracts = _fetch_option_contracts_alpaca(symbol)
+    contracts = _filter_contracts(contracts, latest_price)
+    chain = _fetch_option_chain_alpaca(symbol)
+    options_chain = _get_contract_details(contracts, chain)
+
+    # IV metrics
+    iv_metrics = _compute_iv_metrics(chain)
 
     # News and earnings
     news = _fetch_news_yfinance(symbol)
@@ -389,6 +431,8 @@ def build_full_market_context() -> list[dict[str, Any]]:
     for symbol in config.WATCHLIST:
         try:
             ctx = build_context_for_symbol(symbol)
+            if ctx is None:
+                continue
             # Skip symbols with no options data
             total_contracts = len(ctx["options_chain"].get("calls", [])) + len(ctx["options_chain"].get("puts", []))
             if total_contracts == 0:
