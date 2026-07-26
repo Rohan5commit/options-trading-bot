@@ -51,6 +51,133 @@ def _retry(max_retries: int = 3, backoff_factor: float = 1.0):
     return decorator
 
 
+# ── Contract symbol resolution ────────────────────────────────────────────────
+
+
+@_retry()
+def _fetch_option_contracts_alpaca(underlying: str) -> list[dict[str, Any]]:
+    """Fetch active option contracts from Alpaca Trading API."""
+    url = f"{config.ALPACA_BASE_URL}/v2/options/contracts"
+    params = {
+        "underlying_symbols": underlying,
+        "status": "active",
+        "limit": 1000,
+    }
+    resp = requests.get(url, headers=_alpaca_headers(), params=params, timeout=30)
+    resp.raise_for_status()
+    return resp.json().get("option_contracts", [])
+
+
+def _resolve_contract_symbol(
+    underlying: str,
+    strike: float,
+    option_type: str,
+    expiration: str,
+) -> str | None:
+    """
+    Resolve LLM leg spec to Alpaca contract symbol.
+    LLM outputs: {"strike": 180, "type": "call", "expiration": "2026-08-08"}
+    Alpaca needs: "SPY260808C00180000"
+    """
+    try:
+        contracts = _fetch_option_contracts_alpaca(underlying)
+    except Exception as exc:
+        logger.error("Failed to fetch contracts for %s: %s", underlying, exc)
+        return None
+
+    # Normalize expiration to YYYY-MM-DD
+    exp_normalized = expiration.replace("/", "-")
+
+    for contract in contracts:
+        sym = contract.get("symbol", "")
+        # Parse Alpaca symbol: ROOT + YYMMDD + C/P + STRIKE (8 digits)
+        # Example: SPY260808C00180000
+        if len(sym) < 15:
+            continue
+
+        # Extract components from symbol
+        # Find where the date starts (after alphabetic root)
+        root = ""
+        for c in sym:
+            if c.isalpha():
+                root += c
+            else:
+                break
+
+        if root.upper() != underlying.upper():
+            continue
+
+        # After root: YYMMDD + C/P + 8-digit strike
+        rest = sym[len(root):]
+        if len(rest) < 15:
+            continue
+
+        # Parse date: YYMMDD
+        try:
+            year = 2000 + int(rest[0:2])
+            month = int(rest[2:4])
+            day = int(rest[4:6])
+            contract_exp = f"{year}-{month:02d}-{day:02d}"
+        except (ValueError, IndexError):
+            continue
+
+        if contract_exp != exp_normalized:
+            continue
+
+        # Parse type: C or P
+        contract_type_char = rest[6]
+        contract_type = "call" if contract_type_char == "C" else "put"
+        if contract_type != option_type.lower():
+            continue
+
+        # Parse strike: 8 digits (dollars * 1000)
+        try:
+            contract_strike = int(rest[7:15]) / 1000.0
+        except (ValueError, IndexError):
+            continue
+
+        if abs(contract_strike - strike) < 0.01:
+            logger.info("Resolved contract symbol: %s -> %s", sym, sym)
+            return sym
+
+    logger.warning(
+        "No matching contract found for %s %s %s strike=%.2f",
+        underlying, option_type, expiration, strike,
+    )
+    return None
+
+
+def _resolve_all_leg_symbols(decision: dict[str, Any]) -> bool:
+    """
+    Resolve contract symbols for all legs in a decision.
+    Modifies legs in-place, adding 'symbol' field.
+    Returns True if all legs resolved successfully.
+    """
+    underlying = decision.get("underlying", "")
+    legs = decision.get("legs", [])
+
+    if not legs:
+        return True
+
+    all_resolved = True
+    for leg in legs:
+        strike = leg.get("strike", 0)
+        option_type = leg.get("type", "")
+        expiration = leg.get("expiration", "")
+
+        symbol = _resolve_contract_symbol(underlying, strike, option_type, expiration)
+        if symbol is None:
+            logger.error(
+                "Failed to resolve contract for %s %s %s strike=%.2f",
+                underlying, option_type, expiration, strike,
+            )
+            all_resolved = False
+        else:
+            leg["symbol"] = symbol
+
+    return all_resolved
+
+
 # ── Order submission ───────────────────────────────────────────────────────────
 
 
@@ -208,6 +335,17 @@ def execute_trades(decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "Closing existing position %s for %s %s",
                     existing_pos["id"], strategy, symbol,
                 )
+
+            # Resolve contract symbols for all legs
+            if not is_close:
+                if not _resolve_all_leg_symbols(decision):
+                    logger.error("Failed to resolve contract symbols for %s, skipping", symbol)
+                    results.append({
+                        "decision": decision,
+                        "status": "error",
+                        "error": "Could not resolve contract symbols",
+                    })
+                    continue
 
             payload = _build_order_payload(decision, is_close=is_close)
             order = _submit_order(payload)

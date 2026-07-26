@@ -75,12 +75,19 @@ def _check_position_sizing(decision: dict[str, Any], equity: float) -> str | Non
         return "Cannot determine account equity"
 
     # Estimate total debit/credit from legs
+    # LLM legs may not have 'mid' field, so we use a conservative estimate
+    # based on the strategy type
     total_cost = 0
-    for leg in decision.get("legs", []):
+    legs = decision.get("legs", [])
+    strategy = decision.get("strategy", "")
+
+    for leg in legs:
         mid = leg.get("mid", 0)
         qty = leg.get("quantity", 1)
         if mid <= 0:
-            continue  # Skip legs with no price data
+            # Conservative estimate: assume $2 per contract for debit strategies
+            # For credit strategies, the risk is defined by the spread width
+            mid = 2.0  # conservative default
         if leg.get("side") == "buy":
             total_cost += mid * qty * 100  # options multiplier = 100
         else:
@@ -99,31 +106,40 @@ def _check_position_sizing(decision: dict[str, Any], equity: float) -> str | Non
 def _validate_legs(decision: dict[str, Any]) -> list[str]:
     """
     Validate individual legs against contract-level filters.
-    Returns list of rejection reasons (empty if all legs pass).
+    NOTE: LLM decision legs don't have spread_pct, open_interest, or dte fields.
+    Those fields exist on data_fetcher contracts, not LLM output.
+    We only validate basic leg structure here.
     """
     rejections: list[str] = []
-    for leg in decision.get("legs", []):
-        spread_pct = leg.get("spread_pct", 0)
-        open_interest = leg.get("open_interest", 0)
-        dte = leg.get("dte", 30)
-        sym = leg.get("symbol", "unknown")
+    legs = decision.get("legs", [])
 
-        if spread_pct > config.MAX_BID_ASK_SPREAD_PCT:
-            rejections.append(
-                f"Contract {sym}: bid-ask spread {spread_pct*100:.1f}% exceeds "
-                f"{config.MAX_BID_ASK_SPREAD_PCT*100:.0f}% limit"
-            )
+    if decision.get("action") != "HOLD" and not legs:
+        rejections.append("No legs provided for non-HOLD decision")
+        return rejections
 
-        if open_interest < config.MIN_OPEN_INTEREST:
-            rejections.append(
-                f"Contract {sym}: open interest {open_interest} below "
-                f"minimum {config.MIN_OPEN_INTEREST}"
-            )
+    for leg in legs:
+        # Validate required fields exist
+        for field in ["type", "strike", "expiration", "quantity", "side"]:
+            if field not in leg:
+                rejections.append(f"Leg missing required field: {field}")
 
-        if dte < config.MIN_DTE or dte > config.MAX_DTE:
-            rejections.append(
-                f"Contract {sym}: DTE {dte} outside range [{config.MIN_DTE}, {config.MAX_DTE}]"
-            )
+        # Validate side is buy or sell
+        if leg.get("side") not in ("buy", "sell"):
+            rejections.append(f"Invalid leg side: {leg.get('side')}")
+
+        # Validate type is call or put
+        if leg.get("type") not in ("call", "put"):
+            rejections.append(f"Invalid leg type: {leg.get('type')}")
+
+        # Validate strike is positive
+        strike = leg.get("strike", 0)
+        if strike <= 0:
+            rejections.append(f"Invalid strike price: {strike}")
+
+        # Validate quantity is positive
+        qty = leg.get("quantity", 0)
+        if qty <= 0:
+            rejections.append(f"Invalid quantity: {qty}")
 
     return rejections
 

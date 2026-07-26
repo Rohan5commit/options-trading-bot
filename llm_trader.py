@@ -202,7 +202,7 @@ def _parse_freeform_text(text: str) -> dict[str, Any] | None:
     confidence = float(m.group(2)) if m else 0.7  # default if not found
 
     # Extract reasoning
-    m = _Reasoning_RE.search(text) if hasattr(text, '_Reasoning_RE') else _REASONING_RE.search(text)
+    m = _REASONING_RE.search(text)
     if m is None:
         # Grab first 200 chars after "reasoning" keyword
         idx = text.lower().find("reasoning")

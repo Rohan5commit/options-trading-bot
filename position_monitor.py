@@ -226,3 +226,13 @@ def check_exits() -> list[dict[str, Any]]:
         len(closed_positions), len(remaining), len(exit_recommendations),
     )
     return exit_recommendations
+
+
+if __name__ == "__main__":
+    import logging
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    recommendations = check_exits()
+    if recommendations:
+        print(f"{len(recommendations)} positions sent to LLM for exit evaluation")
+    else:
+        print("No exit recommendations")

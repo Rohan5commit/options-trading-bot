@@ -2,7 +2,7 @@ name: Daily Options Trading
 
 on:
   schedule:
-    - cron: '0 14 * * 1-5'  # 10:00 ET = 14:00 UTC (EDT), Monday-Friday
+    - cron: '0 15 * * 1-5'  # 10:00 AM EST / 11:00 AM EDT, Monday-Friday
   workflow_dispatch:
 
 jobs:
