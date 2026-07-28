@@ -82,6 +82,7 @@ def _fetch_option_chain_alpaca(underlying: str, contract_symbols: list[str] | No
                 greeks = snap.get("greeks", {})
                 quote = snap.get("latestQuote", snap.get("latest_quote", {}))
                 trade = snap.get("latestTrade", snap.get("latest_trade", {}))
+                iv = snap.get("impliedVolatility", snap.get("implied_volatility", 0))
                 results.append({
                     "symbol": symbol,
                     "bid": quote.get("bp", 0),
@@ -94,7 +95,7 @@ def _fetch_option_chain_alpaca(underlying: str, contract_symbols: list[str] | No
                     "theta": greeks.get("theta", 0),
                     "vega": greeks.get("vega", 0),
                     "rho": greeks.get("rho", 0),
-                    "implied_volatility": greeks.get("iv", 0),
+                    "implied_volatility": iv,
                 })
         return results
     else:
@@ -113,6 +114,7 @@ def _fetch_option_chain_alpaca(underlying: str, contract_symbols: list[str] | No
             greeks = snap.get("greeks", {})
             quote = snap.get("latestQuote", snap.get("latest_quote", {}))
             trade = snap.get("latestTrade", snap.get("latest_trade", {}))
+            iv = snap.get("impliedVolatility", snap.get("implied_volatility", 0))
             results.append({
                 "symbol": symbol,
                 "bid": quote.get("bp", 0),
@@ -125,7 +127,7 @@ def _fetch_option_chain_alpaca(underlying: str, contract_symbols: list[str] | No
                 "theta": greeks.get("theta", 0),
                 "vega": greeks.get("vega", 0),
                 "rho": greeks.get("rho", 0),
-                "implied_volatility": greeks.get("iv", 0),
+                "implied_volatility": iv,
             })
         return results
 
