@@ -154,7 +154,7 @@ def _parse_freeform_text(text: str) -> dict[str, Any] | None:
     if action is None:
         # Try to infer action from text
         lower = text.lower()
-        if "hold" in lower and ("no edge" in lower or "no clear" in lower or "neutral" in lower):
+        if "hold" in lower:
             action = "HOLD"
         elif "buy" in lower or "long" in lower:
             action = "BUY"
@@ -182,8 +182,12 @@ def _parse_freeform_text(text: str) -> dict[str, Any] | None:
                 strategy = "iron_condor"
             elif "bull call" in lower or "bull spread" in lower:
                 strategy = "bull_call_spread"
+            elif "bull put" in lower:
+                strategy = "bull_put_spread"
             elif "bear put" in lower or "bear spread" in lower:
                 strategy = "bear_put_spread"
+            elif "bear call" in lower:
+                strategy = "bear_call_spread"
             elif "straddle" in lower:
                 strategy = "straddle"
             elif "strangle" in lower:
@@ -194,10 +198,6 @@ def _parse_freeform_text(text: str) -> dict[str, Any] | None:
                 strategy = "long_call"
             elif "long put" in lower or ("put" in lower and "buy" in lower):
                 strategy = "long_put"
-            elif "sell" in lower and "call" in lower:
-                strategy = "bull_call_spread"  # selling a call = part of spread
-            elif "sell" in lower and "put" in lower:
-                strategy = "bear_put_spread"  # selling a put = part of spread
             elif action == "HOLD":
                 strategy = "none"
             else:
