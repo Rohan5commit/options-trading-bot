@@ -391,6 +391,109 @@ def _truncate_context(ctx: dict[str, Any], max_chars: int = 12000) -> dict[str, 
     return truncated
 
 
+# ── Rule-based override (when LLM is too conservative) ────────────────────────
+
+
+def _rule_based_override(ctx: dict[str, Any]) -> dict[str, Any] | None:
+    """
+    Generate a trade when LLM says HOLD but conditions are favorable.
+    Returns None if no override is needed.
+    """
+    underlying = ctx.get("symbol", "")
+    price = ctx.get("underlying", {}).get("price", 0)
+    rsi = ctx.get("underlying", {}).get("rsi_14", 50)
+    iv = ctx.get("iv_metrics", {}).get("current_iv", 0)
+    macd = ctx.get("underlying", {}).get("macd", {})
+    macd_hist = macd.get("histogram", 0)
+    calls = ctx.get("options_chain", {}).get("calls", [])
+    puts = ctx.get("options_chain", {}).get("puts", [])
+
+    if not calls or not puts or price == 0:
+        return None
+
+    # Find ATM strikes
+    atm_call = min(calls, key=lambda c: abs(c.get("strike", 0) - price))
+    atm_put = min(puts, key=lambda p: abs(p.get("strike", 0) - price))
+
+    # Rule 1: Bull put spread when oversold (RSI < 45, IV > 0.20)
+    if rsi < 45 and iv > 0.20:
+        sell_strike = atm_put.get("strike", 0)
+        buy_strike = sell_strike - 5
+        exp = atm_put.get("expiration", "")
+        if sell_strike > 0 and buy_strike > 0 and exp:
+            return {
+                "action": "BUY",
+                "strategy": "bull_put_spread",
+                "underlying": underlying,
+                "legs": [
+                    {"type": "put", "strike": sell_strike, "expiration": exp, "quantity": 1, "side": "sell"},
+                    {"type": "put", "strike": buy_strike, "expiration": exp, "quantity": 1, "side": "buy"},
+                ],
+                "confidence": 0.65,
+                "reasoning": f"Rule override: RSI {rsi:.1f} oversold, IV {iv:.2f} supports credit selling",
+            }
+
+    # Rule 2: Bull call spread when uptrend (RSI > 55, MACD positive)
+    if rsi > 55 and macd_hist > 0:
+        buy_strike = atm_call.get("strike", 0)
+        sell_strike = buy_strike + 5
+        exp = atm_call.get("expiration", "")
+        if buy_strike > 0 and sell_strike > 0 and exp:
+            return {
+                "action": "BUY",
+                "strategy": "bull_call_spread",
+                "underlying": underlying,
+                "legs": [
+                    {"type": "call", "strike": buy_strike, "expiration": exp, "quantity": 1, "side": "buy"},
+                    {"type": "call", "strike": sell_strike, "expiration": exp, "quantity": 1, "side": "sell"},
+                ],
+                "confidence": 0.65,
+                "reasoning": f"Rule override: RSI {rsi:.1f} uptrend, MACD histogram {macd_hist:.2f} positive",
+            }
+
+    # Rule 3: Bear put spread when downtrend (RSI < 45, MACD negative)
+    if rsi < 45 and macd_hist < 0:
+        buy_strike = atm_put.get("strike", 0)
+        sell_strike = buy_strike - 5
+        exp = atm_put.get("expiration", "")
+        if buy_strike > 0 and sell_strike > 0 and exp:
+            return {
+                "action": "BUY",
+                "strategy": "bear_put_spread",
+                "underlying": underlying,
+                "legs": [
+                    {"type": "put", "strike": buy_strike, "expiration": exp, "quantity": 1, "side": "buy"},
+                    {"type": "put", "strike": sell_strike, "expiration": exp, "quantity": 1, "side": "sell"},
+                ],
+                "confidence": 0.65,
+                "reasoning": f"Rule override: RSI {rsi:.1f} downtrend, MACD histogram {macd_hist:.2f} negative",
+            }
+
+    # Rule 4: Iron condor when high IV (IV > 0.30, neutral RSI)
+    if iv > 0.30 and 40 < rsi < 60:
+        call_sell = min(calls, key=lambda c: abs(c.get("strike", 0) - (price + 5)))
+        call_buy = min(calls, key=lambda c: abs(c.get("strike", 0) - (price + 10)))
+        put_sell = min(puts, key=lambda p: abs(p.get("strike", 0) - (price - 5)))
+        put_buy = min(puts, key=lambda p: abs(p.get("strike", 0) - (price - 10)))
+        exp = call_sell.get("expiration", "")
+        if all([call_sell.get("strike"), call_buy.get("strike"), put_sell.get("strike"), put_buy.get("strike"), exp]):
+            return {
+                "action": "BUY",
+                "strategy": "iron_condor",
+                "underlying": underlying,
+                "legs": [
+                    {"type": "call", "strike": call_sell["strike"], "expiration": exp, "quantity": 1, "side": "sell"},
+                    {"type": "call", "strike": call_buy["strike"], "expiration": exp, "quantity": 1, "side": "buy"},
+                    {"type": "put", "strike": put_sell["strike"], "expiration": exp, "quantity": 1, "side": "sell"},
+                    {"type": "put", "strike": put_buy["strike"], "expiration": exp, "quantity": 1, "side": "buy"},
+                ],
+                "confidence": 0.65,
+                "reasoning": f"Rule override: IV {iv:.2f} high, neutral RSI {rsi:.1f}, range-bound expected",
+            }
+
+    return None
+
+
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 
@@ -424,6 +527,13 @@ def _process_symbol(
             logger.warning("LLM returned unparseable output for %s, skipping", symbol)
             logger.warning("Raw output: %s", raw_response[:500])
             return None
+
+        # Rule-based override: if LLM says HOLD but conditions are favorable, generate a trade
+        if decision.get("action") == "HOLD":
+            override = _rule_based_override(ctx)
+            if override:
+                logger.info("Rule-based override for %s: %s %s", symbol, override["action"], override["strategy"])
+                decision = override
 
         if not _validate_decision(decision):
             logger.warning("LLM decision failed validation for %s", symbol)

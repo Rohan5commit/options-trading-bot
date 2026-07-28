@@ -52,7 +52,7 @@ EMAIL_SMTP_HOST: str = "smtp.gmail.com"
 EMAIL_SMTP_PORT: int = 587
 
 # ── LLM Parameters ────────────────────────────────────────────────────────────
-MIN_CONFIDENCE: float = 0.70
+MIN_CONFIDENCE: float = 0.60
 LLM_MAX_NEW_TOKENS: int = 512  # Synced with modal_inference.py
 LLM_TEMPERATURE: float = 0.2  # Lower for more consistent outputs (research-backed)
 
@@ -83,7 +83,9 @@ STRATEGIES = [
     "long_call",
     "long_put",
     "bull_call_spread",
+    "bull_put_spread",
     "bear_put_spread",
+    "bear_call_spread",
     "iron_condor",
     "straddle",
     "strangle",
