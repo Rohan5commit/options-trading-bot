@@ -57,54 +57,97 @@ def _alpaca_headers() -> dict[str, str]:
 
 
 @_retry()
-def _fetch_option_chain_alpaca(underlying: str) -> list[dict[str, Any]]:
+def _fetch_option_chain_alpaca(underlying: str, contract_symbols: list[str] | None = None) -> list[dict[str, Any]]:
     """
     Fetch the option chain snapshot for an underlying via Alpaca data API.
     Returns list of contract snapshots with Greeks.
+    If contract_symbols is provided, fetch snapshots for those specific symbols.
     """
-    url = f"https://data.alpaca.markets/v1beta1/options/snapshots/{underlying}"
-    params: dict[str, Any] = {
-        "feed": "indicative",
-        "limit": 1000,
-    }
-    resp = requests.get(url, headers=_alpaca_headers(), params=params, timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
-    snapshots = data.get("snapshots", {})
-    results = []
-    for symbol, snap in snapshots.items():
-        greeks = snap.get("greeks", {})
-        quote = snap.get("latest_quote", {})
-        trade = snap.get("latest_trade", {})
-        results.append({
-            "symbol": symbol,
-            "bid": quote.get("bp", 0),
-            "ask": quote.get("ap", 0),
-            "bid_size": quote.get("bs", 0),
-            "ask_size": quote.get("as", 0),
-            "last_trade": trade.get("p", 0),
-            "delta": greeks.get("delta", 0),
-            "gamma": greeks.get("gamma", 0),
-            "theta": greeks.get("theta", 0),
-            "vega": greeks.get("vega", 0),
-            "rho": greeks.get("rho", 0),
-            "implied_volatility": greeks.get("iv", 0),
-        })
-    return results
+    if contract_symbols:
+        # Fetch snapshots for specific contract symbols
+        url = "https://data.alpaca.markets/v1beta1/options/snapshots"
+        # Batch into groups of 50 (API limit)
+        results = []
+        for i in range(0, len(contract_symbols), 50):
+            batch = contract_symbols[i:i+50]
+            params: dict[str, Any] = {
+                "feed": "indicative",
+                "symbols": ",".join(batch),
+            }
+            resp = requests.get(url, headers=_alpaca_headers(), params=params, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            snapshots = data.get("snapshots", {})
+            for symbol, snap in snapshots.items():
+                greeks = snap.get("greeks", {})
+                quote = snap.get("latestQuote", snap.get("latest_quote", {}))
+                trade = snap.get("latestTrade", snap.get("latest_trade", {}))
+                results.append({
+                    "symbol": symbol,
+                    "bid": quote.get("bp", 0),
+                    "ask": quote.get("ap", 0),
+                    "bid_size": quote.get("bs", 0),
+                    "ask_size": quote.get("as", 0),
+                    "last_trade": trade.get("p", 0),
+                    "delta": greeks.get("delta", 0),
+                    "gamma": greeks.get("gamma", 0),
+                    "theta": greeks.get("theta", 0),
+                    "vega": greeks.get("vega", 0),
+                    "rho": greeks.get("rho", 0),
+                    "implied_volatility": greeks.get("iv", 0),
+                })
+        return results
+    else:
+        # Fetch all snapshots for the underlying
+        url = f"https://data.alpaca.markets/v1beta1/options/snapshots/{underlying}"
+        params = {
+            "feed": "indicative",
+            "limit": 1000,
+        }
+        resp = requests.get(url, headers=_alpaca_headers(), params=params, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        snapshots = data.get("snapshots", {})
+        results = []
+        for symbol, snap in snapshots.items():
+            greeks = snap.get("greeks", {})
+            quote = snap.get("latestQuote", snap.get("latest_quote", {}))
+            trade = snap.get("latestTrade", snap.get("latest_trade", {}))
+            results.append({
+                "symbol": symbol,
+                "bid": quote.get("bp", 0),
+                "ask": quote.get("ap", 0),
+                "bid_size": quote.get("bs", 0),
+                "ask_size": quote.get("as", 0),
+                "last_trade": trade.get("p", 0),
+                "delta": greeks.get("delta", 0),
+                "gamma": greeks.get("gamma", 0),
+                "theta": greeks.get("theta", 0),
+                "vega": greeks.get("vega", 0),
+                "rho": greeks.get("rho", 0),
+                "implied_volatility": greeks.get("iv", 0),
+            })
+        return results
 
 
 @_retry()
 def _fetch_option_contracts_alpaca(underlying: str) -> list[dict[str, Any]]:
     """Fetch active option contracts from Alpaca Trading API."""
+    from datetime import timedelta
     url = "https://paper-api.alpaca.markets/v2/options/contracts"
+    # Filter to contracts expiring at least MIN_DTE days from now
+    min_exp_date = (datetime.now(timezone.utc) + timedelta(days=config.MIN_DTE)).strftime("%Y-%m-%d")
     params = {
         "underlying_symbols": underlying,
         "status": "active",
-        "limit": 100,
+        "limit": 1000,
+        "expiration_date_gte": min_exp_date,
     }
     resp = requests.get(url, headers=_alpaca_headers(), params=params, timeout=30)
     resp.raise_for_status()
-    return resp.json().get("option_contracts", [])
+    contracts = resp.json().get("option_contracts", [])
+    logger.debug("Fetched %d contracts for %s (exp >= %s)", len(contracts), underlying, min_exp_date)
+    return contracts
 
 
 @_retry()
@@ -395,7 +438,9 @@ def build_context_for_symbol(symbol: str) -> dict[str, Any] | None:
     # Fetch option chain from Alpaca, filter to ATM ± 10 strikes
     contracts = _fetch_option_contracts_alpaca(symbol)
     contracts = _filter_contracts(contracts, latest_price)
-    chain = _fetch_option_chain_alpaca(symbol)
+    # Get contract symbols for targeted snapshot fetch
+    contract_symbols = [c.get("symbol", "") for c in contracts if c.get("symbol")]
+    chain = _fetch_option_chain_alpaca(symbol, contract_symbols=contract_symbols if contract_symbols else None)
     options_chain = _get_contract_details(contracts, chain)
 
     # IV metrics
