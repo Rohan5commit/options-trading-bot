@@ -411,6 +411,21 @@ def _rule_based_override(ctx: dict[str, Any]) -> dict[str, Any] | None:
     if not calls or not puts or price == 0:
         return None
 
+    def find_closest_strike(options: list[dict], target: float, direction: str = "nearest") -> float | None:
+        """Find closest available strike to target. direction: 'up', 'down', or 'nearest'."""
+        strikes = sorted(set(o.get("strike", 0) for o in options if o.get("strike", 0) > 0))
+        if not strikes:
+            return None
+        if direction == "up":
+            candidates = [s for s in strikes if s >= target]
+        elif direction == "down":
+            candidates = [s for s in strikes if s <= target]
+        else:
+            candidates = strikes
+        if not candidates:
+            return None
+        return min(candidates, key=lambda s: abs(s - target))
+
     # Find ATM strikes
     atm_call = min(calls, key=lambda c: abs(c.get("strike", 0) - price))
     atm_put = min(puts, key=lambda p: abs(p.get("strike", 0) - price))
@@ -418,9 +433,10 @@ def _rule_based_override(ctx: dict[str, Any]) -> dict[str, Any] | None:
     # Rule 1: Bull put spread when oversold (RSI < 45, IV > 0.20)
     if rsi < 45 and iv > 0.20:
         sell_strike = atm_put.get("strike", 0)
-        buy_strike = sell_strike - 5
+        # Find next strike below ATM for the buy leg
+        buy_strike = find_closest_strike(puts, sell_strike - 1, "down")
         exp = atm_put.get("expiration", "")
-        if sell_strike > 0 and buy_strike > 0 and exp:
+        if sell_strike > 0 and buy_strike and buy_strike < sell_strike and exp:
             return {
                 "action": "BUY",
                 "strategy": "bull_put_spread",
@@ -436,9 +452,10 @@ def _rule_based_override(ctx: dict[str, Any]) -> dict[str, Any] | None:
     # Rule 2: Bull call spread when uptrend (RSI > 55, MACD positive)
     if rsi > 55 and macd_hist > 0:
         buy_strike = atm_call.get("strike", 0)
-        sell_strike = buy_strike + 5
+        # Find next strike above ATM for the sell leg
+        sell_strike = find_closest_strike(calls, buy_strike + 1, "up")
         exp = atm_call.get("expiration", "")
-        if buy_strike > 0 and sell_strike > 0 and exp:
+        if buy_strike > 0 and sell_strike and sell_strike > buy_strike and exp:
             return {
                 "action": "BUY",
                 "strategy": "bull_call_spread",
@@ -454,9 +471,10 @@ def _rule_based_override(ctx: dict[str, Any]) -> dict[str, Any] | None:
     # Rule 3: Bear put spread when downtrend (RSI < 45, MACD negative)
     if rsi < 45 and macd_hist < 0:
         buy_strike = atm_put.get("strike", 0)
-        sell_strike = buy_strike - 5
+        # Find next strike below ATM for the sell leg
+        sell_strike = find_closest_strike(puts, buy_strike - 1, "down")
         exp = atm_put.get("expiration", "")
-        if buy_strike > 0 and sell_strike > 0 and exp:
+        if buy_strike > 0 and sell_strike and sell_strike < buy_strike and exp:
             return {
                 "action": "BUY",
                 "strategy": "bear_put_spread",
@@ -471,21 +489,22 @@ def _rule_based_override(ctx: dict[str, Any]) -> dict[str, Any] | None:
 
     # Rule 4: Iron condor when high IV (IV > 0.30, neutral RSI)
     if iv > 0.30 and 40 < rsi < 60:
-        call_sell = min(calls, key=lambda c: abs(c.get("strike", 0) - (price + 5)))
-        call_buy = min(calls, key=lambda c: abs(c.get("strike", 0) - (price + 10)))
-        put_sell = min(puts, key=lambda p: abs(p.get("strike", 0) - (price - 5)))
-        put_buy = min(puts, key=lambda p: abs(p.get("strike", 0) - (price - 10)))
-        exp = call_sell.get("expiration", "")
-        if all([call_sell.get("strike"), call_buy.get("strike"), put_sell.get("strike"), put_buy.get("strike"), exp]):
+        # Find strikes ~5% OTM for wings
+        call_sell = find_closest_strike(calls, price * 1.02, "up")
+        call_buy = find_closest_strike(calls, price * 1.05, "up") if call_sell else None
+        put_sell = find_closest_strike(puts, price * 0.98, "down")
+        put_buy = find_closest_strike(puts, price * 0.95, "down") if put_sell else None
+        exp = atm_call.get("expiration", "")
+        if all([call_sell, call_buy, put_sell, put_buy, exp]) and call_buy > call_sell and put_buy < put_sell:
             return {
                 "action": "BUY",
                 "strategy": "iron_condor",
                 "underlying": underlying,
                 "legs": [
-                    {"type": "call", "strike": call_sell["strike"], "expiration": exp, "quantity": 1, "side": "sell"},
-                    {"type": "call", "strike": call_buy["strike"], "expiration": exp, "quantity": 1, "side": "buy"},
-                    {"type": "put", "strike": put_sell["strike"], "expiration": exp, "quantity": 1, "side": "sell"},
-                    {"type": "put", "strike": put_buy["strike"], "expiration": exp, "quantity": 1, "side": "buy"},
+                    {"type": "call", "strike": call_sell, "expiration": exp, "quantity": 1, "side": "sell"},
+                    {"type": "call", "strike": call_buy, "expiration": exp, "quantity": 1, "side": "buy"},
+                    {"type": "put", "strike": put_sell, "expiration": exp, "quantity": 1, "side": "sell"},
+                    {"type": "put", "strike": put_buy, "expiration": exp, "quantity": 1, "side": "buy"},
                 ],
                 "confidence": 0.65,
                 "reasoning": f"Rule override: IV {iv:.2f} high, neutral RSI {rsi:.1f}, range-bound expected",

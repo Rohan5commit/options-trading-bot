@@ -55,14 +55,16 @@ def _retry(max_retries: int = 3, backoff_factor: float = 1.0):
 
 
 @_retry()
-def _fetch_option_contracts_alpaca(underlying: str) -> list[dict[str, Any]]:
+def _fetch_option_contracts_alpaca(underlying: str, expiration: str | None = None) -> list[dict[str, Any]]:
     """Fetch active option contracts from Alpaca Trading API."""
     url = f"{config.ALPACA_BASE_URL}/v2/options/contracts"
-    params = {
+    params: dict[str, Any] = {
         "underlying_symbols": underlying,
         "status": "active",
         "limit": 1000,
     }
+    if expiration:
+        params["expiration_date"] = expiration
     resp = requests.get(url, headers=_alpaca_headers(), params=params, timeout=30)
     resp.raise_for_status()
     return resp.json().get("option_contracts", [])
@@ -80,7 +82,7 @@ def _resolve_contract_symbol(
     Alpaca needs: "SPY260808C00180000"
     """
     try:
-        contracts = _fetch_option_contracts_alpaca(underlying)
+        contracts = _fetch_option_contracts_alpaca(underlying, expiration=expiration)
     except Exception as exc:
         logger.error("Failed to fetch contracts for %s: %s", underlying, exc)
         return None
