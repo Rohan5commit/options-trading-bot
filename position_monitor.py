@@ -46,6 +46,7 @@ def _check_hard_exit(position: dict[str, Any]) -> tuple[bool, str]:
     """
     Check if a position should be force-closed due to hard rules.
     Returns (should_exit, reason).
+    Handles both debit spreads (entry_price > 0) and credit spreads (entry_price < 0).
     """
     legs = position.get("legs", [])
     if not legs:
@@ -57,22 +58,48 @@ def _check_hard_exit(position: dict[str, Any]) -> tuple[bool, str]:
         if dte <= config.DTE_EXIT_THRESHOLD:
             return True, f"DTE {dte} <= threshold {config.DTE_EXIT_THRESHOLD}"
 
-    # Hard loss exit: close if loss > 100% of debit paid
     entry_price = position.get("entry_price", 0)
     current_price = position.get("current_price", entry_price)
     quantity = position.get("quantity", 1)
+    strategy = position.get("strategy", "")
+
+    # Credit spread logic (bull_put_spread, iron_condor, bear_call_spread)
+    # Entry price is negative (credit received), current price is negative (spread value)
+    # Profit: spread value decreases (approaches 0) → current_price > entry_price (less negative)
+    # Loss: spread value increases (moves against) → current_price < entry_price (more negative)
+    if entry_price < 0:
+        credit_received = abs(entry_price) * quantity * 100
+        current_value = abs(current_price) * quantity * 100
+        # Profit target: close if we can buy back for less than 50% of credit
+        if current_value <= credit_received * (1 - config.PROFIT_TARGET_PCT):
+            profit = credit_received - current_value
+            return True, (
+                f"Profit target: spread value ${current_value:.0f} < "
+                f"{(1-config.PROFIT_TARGET_PCT)*100:.0f}% of credit (${credit_received:.0f})"
+            )
+        # Stop loss: close if we'd lose more than 200% of credit
+        if current_value >= credit_received * (1 + config.STOP_LOSS_PCT):
+            loss = current_value - credit_received
+            return True, (
+                f"Stop loss: loss ${loss:.0f} > {config.STOP_LOSS_PCT*100:.0f}% "
+                f"of credit (${credit_received:.0f})"
+            )
+
+    # Debit spread logic (bull_call_spread, bear_put_spread, long_call/put)
+    # Entry price is positive (debit paid), current price is positive (spread value)
+    # Profit: spread value increases → current_price > entry_price
+    # Loss: spread value decreases → current_price < entry_price
     if entry_price > 0:
-        debit_paid = entry_price * quantity * 100  # options multiplier
+        debit_paid = entry_price * quantity * 100
         current_value = current_price * quantity * 100
+        # Hard loss exit: close if loss > 100% of debit paid
         loss = debit_paid - current_value
         if loss >= debit_paid * config.HARD_EXIT_LOSS_PCT:
             return True, (
                 f"Loss ${loss:.0f} >= {config.HARD_EXIT_LOSS_PCT*100:.0f}% "
                 f"of debit paid (${debit_paid:.0f})"
             )
-
-    # Profit target exit: close if profit > PROFIT_TARGET_PCT of debit paid
-    if entry_price > 0:
+        # Profit target exit: close if profit > 50% of debit paid
         profit = current_value - debit_paid
         if profit >= debit_paid * config.PROFIT_TARGET_PCT:
             return True, (
@@ -97,7 +124,7 @@ def _get_current_price_for_contract(contract_symbol: str) -> float:
         resp.raise_for_status()
         snapshots = resp.json().get("snapshots", {})
         snap = snapshots.get(contract_symbol, {})
-        quote = snap.get("latest_quote", {})
+        quote = snap.get("latestQuote", {})
         bid = quote.get("bp", 0)
         ask = quote.get("ap", 0)
         return (bid + ask) / 2 if (bid + ask) > 0 else 0
@@ -145,9 +172,15 @@ def check_exits() -> list[dict[str, Any]]:
         # Calculate unrealized P&L
         entry_price = pos.get("entry_price", 0)
         quantity = pos.get("quantity", 1)
+        # Debit spreads: entry_price > 0, profit = (current - entry) * qty * 100
+        # Credit spreads: entry_price < 0, profit = (entry - current) * qty * 100
         if entry_price > 0:
             pos["unrealized_pnl"] = round(
                 (net_value - entry_price) * quantity * 100, 2
+            )
+        elif entry_price < 0:
+            pos["unrealized_pnl"] = round(
+                (entry_price - net_value) * quantity * 100, 2
             )
 
         # Check hard exit rules

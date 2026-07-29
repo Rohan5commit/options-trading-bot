@@ -5,6 +5,18 @@ All constants and environment variable loading in one place.
 import os
 from pathlib import Path
 
+# Load .env file if present (local development)
+try:
+    from dotenv import load_dotenv
+    # Try loading from the backup location first, then from the project directory
+    _env_path = Path.home() / ".options-trading-bot.env"
+    if _env_path.exists():
+        load_dotenv(_env_path)
+    else:
+        load_dotenv()
+except ImportError:
+    pass
+
 # ── Paths ──────────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent
 STATE_DIR = BASE_DIR / "state"
@@ -66,10 +78,12 @@ HARD_EXIT_LOSS_PCT: float = 1.0         # Close if loss > 100% of debit paid
 DTE_EXIT_THRESHOLD: int = 3             # Close any position at 3 DTE
 
 # ── Trading Parameters ─────────────────────────────────────────────────────────
-MIN_DTE: int = 3                        # Minimum DTE to open a position (fix #21)
+MIN_DTE: int = 14                       # Minimum DTE to open a position (2 weeks)
 MAX_DTE: int = 45
 MAX_CONTRACTS_PER_SYMBOL: int = 15      # Max contracts sent to LLM per symbol
-PROFIT_TARGET_PCT: float = 0.50         # Close if profit > 50% of debit
+PROFIT_TARGET_PCT: float = 0.50         # Close if profit > 50% of max profit
+STOP_LOSS_PCT: float = 2.0              # Close if loss > 200% of credit received
+MAX_DAILY_TRADES: int = 3               # Max new positions per day
 
 # ── Watchlist ──────────────────────────────────────────────────────────────────
 WATCHLIST: list[str] = [

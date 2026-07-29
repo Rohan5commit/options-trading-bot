@@ -398,7 +398,31 @@ def _rule_based_override(ctx: dict[str, Any]) -> dict[str, Any] | None:
     """
     Generate a trade when LLM says HOLD but conditions are favorable.
     Returns None if no override is needed.
+    Only generates CREDIT SPREADS (bull_put_spread, iron_condor) —
+    debit spreads are too risky for rule-based systems.
     """
+    import state_manager
+
+    # ── Gate 1: Position limit ─────────────────────────────────────────────
+    positions = state_manager.load_positions()
+    if len(positions) >= config.MAX_OPEN_POSITIONS:
+        return None
+
+    # ── Gate 2: Daily trade limit ──────────────────────────────────────────
+    today_entry = state_manager.get_today_entry()
+    trades_today = len(today_entry.get("trades_opened", [])) if today_entry else 0
+    if trades_today >= config.MAX_DAILY_TRADES:
+        return None
+
+    # ── Gate 3: Market regime filter ───────────────────────────────────────
+    # Check if SPY is in a strong downtrend — if so, don't trade
+    spy_rsi = ctx.get("underlying", {}).get("rsi_14", 50)
+    # If this IS SPY and RSI < 30, skip (strong downtrend)
+    if ctx.get("symbol") == "SPY" and spy_rsi < 30:
+        return None
+    # For other symbols, check if we can access SPY context
+    # (we'll use the current symbol's RSI as a proxy since we don't have SPY data here)
+
     underlying = ctx.get("symbol", "")
     price = ctx.get("underlying", {}).get("price", 0)
     rsi = ctx.get("underlying", {}).get("rsi_14", 50)
@@ -427,13 +451,14 @@ def _rule_based_override(ctx: dict[str, Any]) -> dict[str, Any] | None:
         return min(candidates, key=lambda s: abs(s - target))
 
     # Find ATM strikes
-    atm_call = min(calls, key=lambda c: abs(c.get("strike", 0) - price))
     atm_put = min(puts, key=lambda p: abs(p.get("strike", 0) - price))
+    atm_call = min(calls, key=lambda c: abs(c.get("strike", 0) - price))
 
-    # Rule 1: Bull put spread when oversold (RSI < 45, IV > 0.20)
-    if rsi < 45 and iv > 0.20:
+    # ── Rule 1: Bull put spread (CREDIT) when oversold ────────────────────
+    # Profits if stock stays ABOVE the short strike
+    # Only trade when RSI < 40 (strongly oversold) and IV > 0.25
+    if rsi < 40 and iv > 0.25:
         sell_strike = atm_put.get("strike", 0)
-        # Find next strike below ATM for the buy leg
         buy_strike = find_closest_strike(puts, sell_strike - 1, "down")
         exp = atm_put.get("expiration", "")
         if sell_strike > 0 and buy_strike and buy_strike < sell_strike and exp:
@@ -445,55 +470,17 @@ def _rule_based_override(ctx: dict[str, Any]) -> dict[str, Any] | None:
                     {"type": "put", "strike": sell_strike, "expiration": exp, "quantity": 1, "side": "sell"},
                     {"type": "put", "strike": buy_strike, "expiration": exp, "quantity": 1, "side": "buy"},
                 ],
-                "confidence": 0.65,
-                "reasoning": f"Rule override: RSI {rsi:.1f} oversold, IV {iv:.2f} supports credit selling",
+                "confidence": 0.70,
+                "reasoning": f"Rule override: RSI {rsi:.1f} strongly oversold, IV {iv:.2f} supports credit selling",
             }
 
-    # Rule 2: Bull call spread when uptrend (RSI > 55, MACD positive)
-    if rsi > 55 and macd_hist > 0:
-        buy_strike = atm_call.get("strike", 0)
-        # Find next strike above ATM for the sell leg
-        sell_strike = find_closest_strike(calls, buy_strike + 1, "up")
-        exp = atm_call.get("expiration", "")
-        if buy_strike > 0 and sell_strike and sell_strike > buy_strike and exp:
-            return {
-                "action": "BUY",
-                "strategy": "bull_call_spread",
-                "underlying": underlying,
-                "legs": [
-                    {"type": "call", "strike": buy_strike, "expiration": exp, "quantity": 1, "side": "buy"},
-                    {"type": "call", "strike": sell_strike, "expiration": exp, "quantity": 1, "side": "sell"},
-                ],
-                "confidence": 0.65,
-                "reasoning": f"Rule override: RSI {rsi:.1f} uptrend, MACD histogram {macd_hist:.2f} positive",
-            }
-
-    # Rule 3: Bear put spread when downtrend (RSI < 45, MACD negative)
-    if rsi < 45 and macd_hist < 0:
-        buy_strike = atm_put.get("strike", 0)
-        # Find next strike below ATM for the sell leg
-        sell_strike = find_closest_strike(puts, buy_strike - 1, "down")
-        exp = atm_put.get("expiration", "")
-        if buy_strike > 0 and sell_strike and sell_strike < buy_strike and exp:
-            return {
-                "action": "BUY",
-                "strategy": "bear_put_spread",
-                "underlying": underlying,
-                "legs": [
-                    {"type": "put", "strike": buy_strike, "expiration": exp, "quantity": 1, "side": "buy"},
-                    {"type": "put", "strike": sell_strike, "expiration": exp, "quantity": 1, "side": "sell"},
-                ],
-                "confidence": 0.65,
-                "reasoning": f"Rule override: RSI {rsi:.1f} downtrend, MACD histogram {macd_hist:.2f} negative",
-            }
-
-    # Rule 4: Iron condor when high IV (IV > 0.30, neutral RSI)
-    if iv > 0.30 and 40 < rsi < 60:
-        # Find strikes ~5% OTM for wings
-        call_sell = find_closest_strike(calls, price * 1.02, "up")
-        call_buy = find_closest_strike(calls, price * 1.05, "up") if call_sell else None
-        put_sell = find_closest_strike(puts, price * 0.98, "down")
-        put_buy = find_closest_strike(puts, price * 0.95, "down") if put_sell else None
+    # ── Rule 2: Iron condor (CREDIT) when high IV + neutral ───────────────
+    # Profits if stock stays in a range
+    if iv > 0.35 and 40 < rsi < 60:
+        call_sell = find_closest_strike(calls, price * 1.03, "up")
+        call_buy = find_closest_strike(calls, price * 1.06, "up") if call_sell else None
+        put_sell = find_closest_strike(puts, price * 0.97, "down")
+        put_buy = find_closest_strike(puts, price * 0.94, "down") if put_sell else None
         exp = atm_call.get("expiration", "")
         if all([call_sell, call_buy, put_sell, put_buy, exp]) and call_buy > call_sell and put_buy < put_sell:
             return {
@@ -506,7 +493,7 @@ def _rule_based_override(ctx: dict[str, Any]) -> dict[str, Any] | None:
                     {"type": "put", "strike": put_sell, "expiration": exp, "quantity": 1, "side": "sell"},
                     {"type": "put", "strike": put_buy, "expiration": exp, "quantity": 1, "side": "buy"},
                 ],
-                "confidence": 0.65,
+                "confidence": 0.70,
                 "reasoning": f"Rule override: IV {iv:.2f} high, neutral RSI {rsi:.1f}, range-bound expected",
             }
 
