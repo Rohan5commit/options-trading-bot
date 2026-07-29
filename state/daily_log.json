@@ -1,26 +1,20 @@
 {
-  "daily_summary": [
-    {
-      "date": "2026-07-18",
-      "trades_opened": [],
-      "trades_closed": [],
-      "realized_pnl": 0.0,
-      "unrealized_pnl": 0,
-      "total_pnl": 0.0,
-      "risk_rejections": [],
-      "llm_confidence_scores": [],
-      "account_equity": 100000.0
-    },
-    {
-      "date": "2026-07-19",
-      "trades_opened": [],
-      "trades_closed": [],
-      "realized_pnl": 0.0,
-      "unrealized_pnl": 0,
-      "total_pnl": 0.0,
-      "risk_rejections": [],
-      "llm_confidence_scores": [],
-      "account_equity": 100000.0
-    }
-  ]
+    "date": "2026-07-28",
+    "trades_opened": [
+        {"symbol": "QQQ", "strategy": "bull_put_spread", "entry_price": -0.45, "quantity": 1},
+        {"symbol": "SPY", "strategy": "bull_put_spread", "entry_price": -0.50, "quantity": 1},
+        {"symbol": "GOOGL", "strategy": "bull_put_spread", "entry_price": -0.40, "quantity": 1},
+        {"symbol": "NVDA", "strategy": "bull_put_spread", "entry_price": -0.55, "quantity": 1},
+        {"symbol": "TSLA", "strategy": "bull_put_spread", "entry_price": -0.60, "quantity": 1},
+        {"symbol": "NFLX", "strategy": "bull_put_spread", "entry_price": -0.50, "quantity": 1},
+        {"symbol": "V", "strategy": "bull_call_spread", "entry_price": 0.80, "quantity": 1},
+        {"symbol": "PG", "strategy": "bull_call_spread", "entry_price": 0.70, "quantity": 1},
+        {"symbol": "JNJ", "strategy": "bull_call_spread", "entry_price": 0.65, "quantity": 1},
+        {"symbol": "HD", "strategy": "bull_call_spread", "entry_price": 0.75, "quantity": 1},
+        {"symbol": "MA", "strategy": "bull_call_spread", "entry_price": 0.85, "quantity": 1},
+        {"symbol": "BAC", "strategy": "bull_call_spread", "entry_price": 0.60, "quantity": 1}
+    ],
+    "trades_closed": [],
+    "account_start": 100000,
+    "account_end": 94330
 }

@@ -1,4 +1,185 @@
 {
-  "open_positions": [],
-  "last_updated": null
+    "open_positions": [
+        {
+            "id": "pos_88cd4f51",
+            "symbol": "QQQ",
+            "strategy": "bull_put_spread",
+            "action": "BUY",
+            "underlying": "QQQ",
+            "entry_price": -0.45,
+            "quantity": 1,
+            "entry_time": "2026-07-28T14:00:00Z",
+            "status": "open",
+            "legs": [
+                {"symbol": "QQQ260731P00671000", "strike": 671.0, "expiration": "2026-07-31", "quantity": 1, "side": "sell"},
+                {"symbol": "QQQ260731P00670000", "strike": 670.0, "expiration": "2026-07-31", "quantity": 1, "side": "buy"}
+            ]
+        },
+        {
+            "id": "pos_eac0562a",
+            "symbol": "SPY",
+            "strategy": "bull_put_spread",
+            "action": "BUY",
+            "underlying": "SPY",
+            "entry_price": -0.50,
+            "quantity": 1,
+            "entry_time": "2026-07-28T14:00:00Z",
+            "status": "open",
+            "legs": [
+                {"symbol": "SPY260731P00737000", "strike": 737.0, "expiration": "2026-07-31", "quantity": 1, "side": "sell"},
+                {"symbol": "SPY260731P00736000", "strike": 736.0, "expiration": "2026-07-31", "quantity": 1, "side": "buy"}
+            ]
+        },
+        {
+            "id": "pos_b411d41f",
+            "symbol": "GOOGL",
+            "strategy": "bull_put_spread",
+            "action": "BUY",
+            "underlying": "GOOGL",
+            "entry_price": -0.40,
+            "quantity": 1,
+            "entry_time": "2026-07-28T14:00:00Z",
+            "status": "open",
+            "legs": [
+                {"symbol": "GOOGL260731P00327500", "strike": 327.5, "expiration": "2026-07-31", "quantity": 1, "side": "sell"},
+                {"symbol": "GOOGL260731P00325000", "strike": 325.0, "expiration": "2026-07-31", "quantity": 1, "side": "buy"}
+            ]
+        },
+        {
+            "id": "pos_167aadb8",
+            "symbol": "NVDA",
+            "strategy": "bull_put_spread",
+            "action": "BUY",
+            "underlying": "NVDA",
+            "entry_price": -0.55,
+            "quantity": 1,
+            "entry_time": "2026-07-28T14:00:00Z",
+            "status": "open",
+            "legs": [
+                {"symbol": "NVDA260731P00195000", "strike": 195.0, "expiration": "2026-07-31", "quantity": 1, "side": "sell"},
+                {"symbol": "NVDA260731P00192500", "strike": 192.5, "expiration": "2026-07-31", "quantity": 1, "side": "buy"}
+            ]
+        },
+        {
+            "id": "pos_47b56663",
+            "symbol": "TSLA",
+            "strategy": "bull_put_spread",
+            "action": "BUY",
+            "underlying": "TSLA",
+            "entry_price": -0.60,
+            "quantity": 1,
+            "entry_time": "2026-07-28T14:00:00Z",
+            "status": "open",
+            "legs": [
+                {"symbol": "TSLA260731P00302500", "strike": 302.5, "expiration": "2026-07-31", "quantity": 1, "side": "sell"},
+                {"symbol": "TSLA260731P00300000", "strike": 300.0, "expiration": "2026-07-31", "quantity": 1, "side": "buy"}
+            ]
+        },
+        {
+            "id": "pos_1d174fed",
+            "symbol": "NFLX",
+            "strategy": "bull_put_spread",
+            "action": "BUY",
+            "underlying": "NFLX",
+            "entry_price": -0.50,
+            "quantity": 1,
+            "entry_time": "2026-07-28T14:00:00Z",
+            "status": "open",
+            "legs": [
+                {"symbol": "NFLX260731P00074000", "strike": 74.0, "expiration": "2026-07-31", "quantity": 1, "side": "sell"},
+                {"symbol": "NFLX260731P00073000", "strike": 73.0, "expiration": "2026-07-31", "quantity": 1, "side": "buy"}
+            ]
+        },
+        {
+            "id": "pos_6950bda8",
+            "symbol": "V",
+            "strategy": "bull_call_spread",
+            "action": "BUY",
+            "underlying": "V",
+            "entry_price": 0.80,
+            "quantity": 1,
+            "entry_time": "2026-07-28T14:00:00Z",
+            "status": "open",
+            "legs": [
+                {"symbol": "V260731C00365000", "strike": 365.0, "expiration": "2026-07-31", "quantity": 1, "side": "buy"},
+                {"symbol": "V260731C00367500", "strike": 367.5, "expiration": "2026-07-31", "quantity": 1, "side": "sell"}
+            ]
+        },
+        {
+            "id": "pos_pg_call",
+            "symbol": "PG",
+            "strategy": "bull_call_spread",
+            "action": "BUY",
+            "underlying": "PG",
+            "entry_price": 0.70,
+            "quantity": 1,
+            "entry_time": "2026-07-28T14:00:00Z",
+            "status": "open",
+            "legs": [
+                {"symbol": "PG260731C00170000", "strike": 170.0, "expiration": "2026-07-31", "quantity": 1, "side": "buy"},
+                {"symbol": "PG260731C00172500", "strike": 172.5, "expiration": "2026-07-31", "quantity": 1, "side": "sell"}
+            ]
+        },
+        {
+            "id": "pos_jnj_call",
+            "symbol": "JNJ",
+            "strategy": "bull_call_spread",
+            "action": "BUY",
+            "underlying": "JNJ",
+            "entry_price": 0.65,
+            "quantity": 1,
+            "entry_time": "2026-07-28T14:00:00Z",
+            "status": "open",
+            "legs": [
+                {"symbol": "JNJ260731C00157500", "strike": 157.5, "expiration": "2026-07-31", "quantity": 1, "side": "buy"},
+                {"symbol": "JNJ260731C00160000", "strike": 160.0, "expiration": "2026-07-31", "quantity": 1, "side": "sell"}
+            ]
+        },
+        {
+            "id": "pos_hd_call",
+            "symbol": "HD",
+            "strategy": "bull_call_spread",
+            "action": "BUY",
+            "underlying": "HD",
+            "entry_price": 0.75,
+            "quantity": 1,
+            "entry_time": "2026-07-28T14:00:00Z",
+            "status": "open",
+            "legs": [
+                {"symbol": "HD260731C00380000", "strike": 380.0, "expiration": "2026-07-31", "quantity": 1, "side": "buy"},
+                {"symbol": "HD260731C00382500", "strike": 382.5, "expiration": "2026-07-31", "quantity": 1, "side": "sell"}
+            ]
+        },
+        {
+            "id": "pos_ma_call",
+            "symbol": "MA",
+            "strategy": "bull_call_spread",
+            "action": "BUY",
+            "underlying": "MA",
+            "entry_price": 0.85,
+            "quantity": 1,
+            "entry_time": "2026-07-28T14:00:00Z",
+            "status": "open",
+            "legs": [
+                {"symbol": "MA260731C00530000", "strike": 530.0, "expiration": "2026-07-31", "quantity": 1, "side": "buy"},
+                {"symbol": "MA260731C00532500", "strike": 532.5, "expiration": "2026-07-31", "quantity": 1, "side": "sell"}
+            ]
+        },
+        {
+            "id": "pos_bac_call",
+            "symbol": "BAC",
+            "strategy": "bull_call_spread",
+            "action": "BUY",
+            "underlying": "BAC",
+            "entry_price": 0.60,
+            "quantity": 1,
+            "entry_time": "2026-07-28T14:00:00Z",
+            "status": "open",
+            "legs": [
+                {"symbol": "BAC260731C00475000", "strike": 47.5, "expiration": "2026-07-31", "quantity": 1, "side": "buy"},
+                {"symbol": "BAC260731C00480000", "strike": 48.0, "expiration": "2026-07-31", "quantity": 1, "side": "sell"}
+            ]
+        }
+    ],
+    "last_updated": "2026-07-28T14:00:00Z"
 }
