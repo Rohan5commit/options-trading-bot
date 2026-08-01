@@ -65,6 +65,14 @@ def _check_position_limit() -> bool:
     return len(positions) >= config.MAX_OPEN_POSITIONS
 
 
+def _count_trades_today() -> int:
+    """Count how many trades have been opened today."""
+    entry = state_manager.get_today_entry()
+    if entry is None:
+        return 0
+    return len(entry.get("trades_opened", []))
+
+
 def _check_position_sizing(decision: dict[str, Any], equity: float) -> str | None:
     """
     Validate that the proposed position size is within limits.
@@ -181,8 +189,15 @@ def validate(decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return approved
 
     equity = data_fetcher.get_account_equity()
+    trades_today = _count_trades_today()
+    daily_limit_reached = trades_today >= config.MAX_DAILY_TRADES
 
     for decision in actionable:
+        # Daily trade limit check
+        if daily_limit_reached:
+            rejections.append(RiskRejection(decision, f"Max {config.MAX_DAILY_TRADES} daily trades reached ({trades_today} today)"))
+            continue
+
         # Position sizing check
         sizing_rejection = _check_position_sizing(decision, equity)
         if sizing_rejection:
@@ -198,6 +213,9 @@ def validate(decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
         # All checks passed
         approved.append(decision)
+        trades_today += 1  # increment for subsequent decisions in this batch
+        if trades_today >= config.MAX_DAILY_TRADES:
+            daily_limit_reached = True
         logger.info(
             "Approved: %s %s on %s (confidence: %.2f)",
             decision.get("action", ""), decision.get("strategy", ""),

@@ -113,12 +113,15 @@ def _check_hard_exit(position: dict[str, Any]) -> tuple[bool, str]:
 def _get_current_price_for_contract(contract_symbol: str) -> float:
     """Fetch the current mid price for an option contract."""
     try:
+        import re as _re
         import requests
         headers = {
             "APCA-API-KEY-ID": config.ALPACA_API_KEY,
             "APCA-API-SECRET-KEY": config.ALPACA_SECRET_KEY,
         }
-        underlying = "".join(c for c in contract_symbol if c.isalpha())
+        # Extract root symbol: "GOOGL260812P00335000" → "GOOGL", "SPY260820C00736000" → "SPY"
+        match = _re.match(r'^([A-Za-z]+)', contract_symbol)
+        underlying = match.group(1) if match else contract_symbol
         url = f"{config.ALPACA_DATA_URL}/v1beta1/options/snapshots/{underlying}"
         resp = requests.get(url, headers=headers, params={"feed": "indicative"}, timeout=30)
         resp.raise_for_status()

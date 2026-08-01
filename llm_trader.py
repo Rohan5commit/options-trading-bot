@@ -5,12 +5,17 @@ and parses structured trade decisions from the LLM response.
 import json
 import logging
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import config
 
 logger = logging.getLogger(__name__)
+
+# ── In-memory daily trade counter (fixes MAX_DAILY_TRADES being dead code) ────
+_trades_opened_today = 0
+_trades_lock = threading.Lock()
 
 # ── System prompt (research-optimized: few-shot + CoT + regime awareness) ─────
 
@@ -401,6 +406,7 @@ def _rule_based_override(ctx: dict[str, Any]) -> dict[str, Any] | None:
     Only generates CREDIT SPREADS (bull_put_spread, iron_condor) —
     debit spreads are too risky for rule-based systems.
     """
+    global _trades_opened_today
     import state_manager
 
     # ── Gate 1: Position limit ─────────────────────────────────────────────
@@ -408,11 +414,10 @@ def _rule_based_override(ctx: dict[str, Any]) -> dict[str, Any] | None:
     if len(positions) >= config.MAX_OPEN_POSITIONS:
         return None
 
-    # ── Gate 2: Daily trade limit ──────────────────────────────────────────
-    today_entry = state_manager.get_today_entry()
-    trades_today = len(today_entry.get("trades_opened", [])) if today_entry else 0
-    if trades_today >= config.MAX_DAILY_TRADES:
-        return None
+    # ── Gate 2: Daily trade limit (in-memory counter — thread-safe) ────────
+    with _trades_lock:
+        if _trades_opened_today >= config.MAX_DAILY_TRADES:
+            return None
 
     # ── Gate 3: Market regime filter ───────────────────────────────────────
     # Check if SPY is in a strong downtrend — if so, don't trade
@@ -540,6 +545,10 @@ def _process_symbol(
             if override:
                 logger.info("Rule-based override for %s: %s %s", symbol, override["action"], override["strategy"])
                 decision = override
+                # Increment in-memory counter (thread-safe)
+                with _trades_lock:
+                    global _trades_opened_today
+                    _trades_opened_today += 1
 
         if not _validate_decision(decision):
             logger.warning("LLM decision failed validation for %s", symbol)
@@ -573,8 +582,13 @@ def get_trade_decisions(
     For each symbol's market context, call the LLM and parse the trade decision.
     Parallelizes across symbols for faster execution.
     """
+    global _trades_opened_today
     if not market_contexts:
         return []
+
+    # Reset daily counter at start of each pipeline run
+    with _trades_lock:
+        _trades_opened_today = 0
 
     exit_recs = exit_recommendations or []
     decisions: list[dict[str, Any]] = []
