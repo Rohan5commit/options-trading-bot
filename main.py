@@ -106,7 +106,11 @@ def run_pipeline() -> None:
     execution_results = []
     try:
         execution_results = executor.execute_trades(approved_decisions)
-        logger.info("Executed %d trades", len(execution_results))
+        actual_trades = [r for r in execution_results if r.get("status") != "skipped"]
+        logger.info(
+            "Executed %d trades (%d skipped as HOLD)",
+            len(actual_trades), len(execution_results) - len(actual_trades),
+        )
     except Exception as exc:
         logger.error("Executor failed: %s", exc)
 

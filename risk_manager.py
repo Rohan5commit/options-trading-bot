@@ -66,11 +66,11 @@ def _check_position_limit() -> bool:
 
 
 def _count_trades_today() -> int:
-    """Count how many trades have been opened today."""
+    """Count trades opened today: daily log + in-memory counter from llm_trader."""
+    from llm_trader import _trades_opened_today
     entry = state_manager.get_today_entry()
-    if entry is None:
-        return 0
-    return len(entry.get("trades_opened", []))
+    log_count = len(entry.get("trades_opened", [])) if entry else 0
+    return log_count + _trades_opened_today
 
 
 def _check_position_sizing(decision: dict[str, Any], equity: float) -> str | None:
