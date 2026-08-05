@@ -546,17 +546,12 @@ def _process_symbol(
                 logger.info("Rule-based override for %s: %s %s", symbol, override["action"], override["strategy"])
                 decision = override
 
-        # Track ALL BUY decisions (overrides AND LLM-originated) — enforce daily limit
+        # Track ALL BUY decisions (overrides AND LLM-originated)
+        # Enforcement happens in risk_manager.validate() — here we only count
         if decision.get("action") == "BUY":
             with _trades_lock:
                 global _trades_opened_today
                 _trades_opened_today += 1
-                if _trades_opened_today > config.MAX_DAILY_TRADES:
-                    logger.info(
-                        "Daily trade limit reached (%d/%d), skipping %s",
-                        _trades_opened_today, config.MAX_DAILY_TRADES, symbol,
-                    )
-                    return None
 
         if not _validate_decision(decision):
             logger.warning("LLM decision failed validation for %s", symbol)
