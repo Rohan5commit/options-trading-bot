@@ -44,13 +44,6 @@ jobs:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
 
-      - name: Fetch market data
-        run: python -c "import data_fetcher; print(len(data_fetcher.build_full_market_context()), 'symbols loaded')"
-        env:
-          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
-          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
-
       - name: Run full trading pipeline
         run: python main.py
         env:

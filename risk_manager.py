@@ -66,11 +66,11 @@ def _check_position_limit() -> bool:
 
 
 def _count_trades_today() -> int:
-    """Count trades opened today: daily log + in-memory counter from llm_trader."""
-    from llm_trader import _trades_opened_today
+    """Count trades executed today from daily log.
+    NOTE: Does NOT include llm_trader._trades_opened_today (current run's decisions).
+    The risk manager's own loop counter handles the current batch limit."""
     entry = state_manager.get_today_entry()
-    log_count = len(entry.get("trades_opened", [])) if entry else 0
-    return log_count + _trades_opened_today
+    return len(entry.get("trades_opened", [])) if entry else 0
 
 
 def _check_position_sizing(decision: dict[str, Any], equity: float) -> str | None:

@@ -81,8 +81,9 @@ _LEG_RE_ALT = re.compile(
     re.I
 )
 _STRATEGIES = {
-    "long_call", "long_put", "bull_call_spread", "bear_put_spread",
-    "iron_condor", "straddle", "strangle", "calendar_spread", "none"
+    "long_call", "long_put", "bull_call_spread", "bull_put_spread",
+    "bear_put_spread", "bear_call_spread", "iron_condor", "straddle",
+    "strangle", "calendar_spread", "none"
 }
 
 
