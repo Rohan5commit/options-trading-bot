@@ -172,6 +172,34 @@ def validate(decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return approved
 
     # Global checks — only apply to actionable decisions
+    equity = data_fetcher.get_account_equity()
+    if equity <= 0:
+        logger.warning("Cannot determine account equity — rejecting ALL new trades")
+        for d in actionable:
+            rejections.append(RiskRejection(d, "Cannot determine account equity"))
+        _log_rejections(rejections)
+        return approved
+
+    # Cumulative circuit breaker: halt NEW entries below the equity floor.
+    # Exits are unaffected (position_monitor runs independently).
+    if equity < config.EQUITY_FLOOR:
+        logger.warning(
+            "Equity floor breached: $%.2f < $%.2f — rejecting ALL new trades",
+            equity, config.EQUITY_FLOOR,
+        )
+        for d in actionable:
+            rejections.append(RiskRejection(
+                d,
+                f"Equity ${equity:,.0f} below floor ${config.EQUITY_FLOOR:,.0f} — new entries halted",
+            ))
+        _log_rejections(rejections)
+        entry = state_manager.get_today_entry()
+        if entry is None:
+            entry = state_manager.create_today_entry()
+        entry["equity_floor_breached"] = True
+        state_manager.save_today_entry(entry)
+        return approved
+
     daily_loss_halted = _check_daily_loss_limit()
     if daily_loss_halted:
         logger.warning("Daily loss limit reached — rejecting ALL new trades")
@@ -188,7 +216,6 @@ def validate(decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
         _log_rejections(rejections)
         return approved
 
-    equity = data_fetcher.get_account_equity()
     trades_today = _count_trades_today()
     daily_limit_reached = trades_today >= config.MAX_DAILY_TRADES
 

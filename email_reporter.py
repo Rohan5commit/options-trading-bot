@@ -74,6 +74,7 @@ def _build_email_body() -> str:
             <p>Unrealized P&L: <span class="{'pnl-positive' if unrealized >= 0 else 'pnl-negative'}">{_format_currency(unrealized)}</span></p>
             <p><strong>Total P&L: <span style="color:{pnl_color}">{_format_currency(total)}</span></strong></p>
             <p>Account Equity: <strong>{_format_currency(entry.get('account_equity', 0))}</strong></p>
+            {'<p><strong style="color:#c62828">WARNING: equity floor breached — new entries halted, exits continue</strong></p>' if entry.get('equity_floor_breached') else ''}
         </div>
     """
 

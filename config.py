@@ -76,14 +76,21 @@ MAX_BID_ASK_SPREAD_PCT: float = 0.10    # Reject contracts with spread > 10%
 MIN_OPEN_INTEREST: int = 100            # Reject contracts with OI < 100
 HARD_EXIT_LOSS_PCT: float = 1.0         # Close if loss > 100% of debit paid
 DTE_EXIT_THRESHOLD: int = 3             # Close any position at 3 DTE
+EQUITY_FLOOR: float = 80000.0           # Halt NEW entries if equity falls below this (exits still run)
 
 # ── Trading Parameters ─────────────────────────────────────────────────────────
 MIN_DTE: int = 14                       # Minimum DTE to open a position (2 weeks)
 MAX_DTE: int = 45
 MAX_CONTRACTS_PER_SYMBOL: int = 15      # Max contracts sent to LLM per symbol
 PROFIT_TARGET_PCT: float = 0.50         # Close if profit > 50% of max profit
-STOP_LOSS_PCT: float = 2.0              # Close if loss > 200% of credit received
+STOP_LOSS_PCT: float = 1.0              # Close if loss > 100% of credit received
 MAX_DAILY_TRADES: int = 3               # Max new positions per day
+
+# ── Entry Quality (rule-based override) ────────────────────────────────────────
+MIN_OTM_PCT: float = 0.02               # Short strike must be >= 2% OTM
+SHORT_DELTA_MIN: float = 0.05           # Short leg |delta| lower bound (when Greeks available)
+SHORT_DELTA_MAX: float = 0.22           # Short leg |delta| upper bound (when Greeks available)
+REQUIRE_ABOVE_MA: bool = True           # Require price above 20-day MA (bollinger middle)
 
 # ── Watchlist ──────────────────────────────────────────────────────────────────
 WATCHLIST: list[str] = [
@@ -105,6 +112,17 @@ STRATEGIES = [
     "strangle",
     "calendar_spread",
 ]
+
+# Credit strategies collect premium up front (signed entry must be negative).
+# Debit strategies pay up front (signed entry must be positive).
+# Single source of truth — used by executor (entry normalization) and
+# position_monitor (exit classification). Do NOT trust Alpaca's
+# filled_avg_price sign: it has come back positive for credit mleg fills.
+CREDIT_STRATEGIES = frozenset({"bull_put_spread", "bear_call_spread", "iron_condor"})
+DEBIT_STRATEGIES = frozenset({
+    "long_call", "long_put", "bull_call_spread", "bear_put_spread",
+    "straddle", "strangle", "calendar_spread",
+})
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "INFO")

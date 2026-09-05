@@ -245,10 +245,10 @@ def _submit_order(payload: dict[str, Any]) -> dict[str, Any]:
     return order
 
 
-def _poll_order(order_id: str) -> dict[str, Any]:
+def _poll_order(order_id: str, max_attempts: int = MAX_POLL_ATTEMPTS) -> dict[str, Any]:
     """Poll order status until filled, canceled, or expired."""
     url = f"{config.ALPACA_BASE_URL}/v2/orders/{order_id}"
-    for attempt in range(MAX_POLL_ATTEMPTS):
+    for attempt in range(max_attempts):
         try:
             resp = requests.get(url, headers=_alpaca_headers(), timeout=30)
             resp.raise_for_status()
@@ -260,10 +260,10 @@ def _poll_order(order_id: str) -> dict[str, Any]:
             logger.debug("Order %s status: %s (attempt %d)", order_id, status, attempt + 1)
         except Exception as exc:
             logger.warning("Poll attempt %d failed for order %s: %s", attempt + 1, order_id, exc)
-        if attempt < MAX_POLL_ATTEMPTS - 1:
+        if attempt < max_attempts - 1:
             time.sleep(POLL_INTERVAL_SEC)
 
-    logger.warning("Order %s polling timed out after %d attempts", order_id, MAX_POLL_ATTEMPTS)
+    logger.warning("Order %s polling timed out after %d attempts", order_id, max_attempts)
     return {"id": order_id, "status": "unknown"}
 
 
@@ -279,6 +279,75 @@ def close_position(contract_symbol: str) -> dict[str, Any]:
     order = resp.json()
     logger.info("Close position order submitted for %s: %s", contract_symbol, order.get("id"))
     return order
+
+
+def close_position_and_poll(contract_symbol: str, max_attempts: int = 10) -> float:
+    """
+    Close a position leg and wait briefly for the fill.
+    Returns the fill price per share. Raises if the leg did not fill —
+    callers fall back to mid-quote estimates in that case.
+    """
+    order = close_position(contract_symbol)
+    order_id = order.get("id", "")
+    if not order_id:
+        raise ValueError(f"No order id returned closing {contract_symbol}")
+    final_order = _poll_order(order_id, max_attempts=max_attempts)
+    if final_order.get("status") != "filled":
+        raise ValueError(
+            f"Close for {contract_symbol} not filled (status: {final_order.get('status')})"
+        )
+    fill_price = float(final_order.get("filled_avg_price", 0))
+    logger.info("Leg %s closed at fill $%.4f", contract_symbol, fill_price)
+    return fill_price
+
+
+def _normalize_entry_price(strategy: str, filled_price: float) -> float:
+    """
+    Force the entry fill sign to match strategy economics.
+    Credit strategies must be negative (premium received), debit positive.
+    Alpaca has returned positive filled_avg_price for credit mleg fills,
+    which corrupted every downstream P&L calculation. abs() is a no-op when
+    the broker already reports the correct sign.
+    """
+    if strategy in config.CREDIT_STRATEGIES:
+        if filled_price > 0:
+            logger.warning(
+                "Credit strategy %s filled positive (%.4f) — negating to match economics",
+                strategy, filled_price,
+            )
+        return -abs(filled_price)
+    if strategy in config.DEBIT_STRATEGIES:
+        if filled_price < 0:
+            logger.warning(
+                "Debit strategy %s filled negative (%.4f) — taking abs to match economics",
+                strategy, filled_price,
+            )
+        return abs(filled_price)
+    return filled_price  # unknown strategy — trust the broker
+
+
+def _spread_width_and_expected(legs: list[dict[str, Any]]) -> tuple[float | None, float | None]:
+    """
+    Compute (width, expected_net_per_share) for a vertical spread from leg
+    analytics attached by the decision-maker (mid quotes). Returns (None, None)
+    when legs lack mid data (e.g. legacy LLM-sourced decisions).
+    width = distance between the two strikes; expected_net = Σ buy_mid − Σ sell_mid
+    (negative = net credit).
+    """
+    if len(legs) != 2:
+        return None, None
+    mids = [leg.get("mid", 0) for leg in legs]
+    if any(m is None or m <= 0 for m in mids):
+        return None, None
+    strikes = [float(leg.get("strike", 0)) for leg in legs]
+    width = abs(strikes[0] - strikes[1])
+    expected_net = 0.0
+    for leg, mid in zip(legs, mids):
+        if leg.get("side") == "buy":
+            expected_net += mid * leg.get("quantity", 1)
+        else:
+            expected_net -= mid * leg.get("quantity", 1)
+    return width, round(expected_net, 4)
 
 
 # ── Position matching for SELL/close decisions ────────────────────────────────
@@ -391,6 +460,24 @@ def execute_trades(decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
                         "side": leg.get("side", ""),
                     })
 
+                # Normalize fill sign to strategy economics (credit < 0 < debit)
+                # and precompute risk figures from mid quotes when available.
+                raw_fill = float(final_order.get("filled_avg_price", 0))
+                entry_price = _normalize_entry_price(strategy, raw_fill)
+                width, expected_net = _spread_width_and_expected(decision.get("legs", []))
+                is_credit = strategy in config.CREDIT_STRATEGIES
+                credit_received = abs(entry_price) if is_credit else 0.0
+                if width is not None and is_credit:
+                    max_loss = round(max(width - abs(entry_price), 0.0) * 100, 2)
+                else:
+                    max_loss = None
+                if expected_net is not None:
+                    logger.info(
+                        "Position %s entry: fill $%.4f vs mid-est $%.4f (slippage $%.4f/share)",
+                        position_id, entry_price, expected_net,
+                        abs(entry_price - expected_net),
+                    )
+
                 position = {
                     "id": position_id,
                     "order_id": order_id,
@@ -398,11 +485,16 @@ def execute_trades(decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "strategy": strategy,
                     "legs": legs_detail,
                     "entry_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-                    "entry_price": float(final_order.get("filled_avg_price", 0)),
+                    "entry_price": entry_price,
                     "quantity": int(final_order.get("filled_qty", 0)),
-                    "current_price": float(final_order.get("filled_avg_price", 0)),
+                    "current_price": entry_price,
                     "unrealized_pnl": 0.0,
                     "fill_status": fill_status,
+                    "is_credit": is_credit,
+                    "credit_received": round(credit_received * 100, 2),
+                    "max_loss": max_loss,
+                    "width": width,
+                    "expected_net": expected_net,
                     "llm_reasoning": decision.get("reasoning", ""),
                     "llm_confidence": decision.get("confidence", 0),
                 }

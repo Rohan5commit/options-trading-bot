@@ -24,16 +24,41 @@ def _calculate_dte(expiration: str) -> int:
         return 999
 
 
-def _compute_net_position_value(pos: dict[str, Any], leg_prices: dict[str, float]) -> float:
+def _is_credit_position(pos: dict[str, Any]) -> bool:
     """
-    Compute the net value of a multi-leg position.
-    For debit spreads: net = sum(buy_prices) - sum(sell_prices)
-    For credit spreads: net = sum(sell_prices) - sum(buy_prices)
+    Classify a position as credit vs debit WITHOUT trusting the entry_price sign.
+    Alpaca has returned positive filled_avg_price for credit mleg fills before,
+    which sent credit spreads down the debit exit branch (and vice versa).
+    Priority: stored flag (executor-written) → strategy sets → entry sign fallback.
+    """
+    if "is_credit" in pos:
+        return bool(pos["is_credit"])
+    strategy = pos.get("strategy", "")
+    if strategy in config.CREDIT_STRATEGIES:
+        return True
+    if strategy in config.DEBIT_STRATEGIES:
+        return False
+    return pos.get("entry_price", 0) < 0
+
+
+def _compute_net_position_value(
+    pos: dict[str, Any], leg_prices: dict[str, float]
+) -> float | None:
+    """
+    Compute the signed net value per share of a multi-leg position.
+    net = sum(buy_prices) - sum(sell_prices).
+    Negative net = spread BuyBack cost (credit position still alive).
+    Positive net = spread sale value (debit position still alive).
+    Returns None if ANY leg is missing a quote — callers must NOT evaluate
+    exits on partial data (a missing expensive leg collapses net toward 0 and
+    triggers phantom "profit target" exits).
     """
     net = 0.0
     for leg in pos.get("legs", []):
         sym = leg.get("symbol", "")
-        price = leg_prices.get(sym, 0)
+        if sym not in leg_prices:
+            return None
+        price = leg_prices[sym]
         qty = leg.get("quantity", 1)
         if leg.get("side") == "buy":
             net += price * qty
@@ -62,12 +87,13 @@ def _check_hard_exit(position: dict[str, Any]) -> tuple[bool, str]:
     current_price = position.get("current_price", entry_price)
     quantity = position.get("quantity", 1)
     strategy = position.get("strategy", "")
+    is_credit = _is_credit_position(position)
 
     # Credit spread logic (bull_put_spread, iron_condor, bear_call_spread)
-    # Entry price is negative (credit received), current price is negative (spread value)
-    # Profit: spread value decreases (approaches 0) → current_price > entry_price (less negative)
-    # Loss: spread value increases (moves against) → current_price < entry_price (more negative)
-    if entry_price < 0:
+    # Classification comes from leg sides/strategy, NOT the entry_price sign.
+    # Profit: buyback cost drops below (1 - PROFIT_TARGET_PCT) of credit.
+    # Loss: buyback cost rises above (1 + STOP_LOSS_PCT) of credit.
+    if is_credit:
         credit_received = abs(entry_price) * quantity * 100
         current_value = abs(current_price) * quantity * 100
         # Profit target: close if we can buy back for less than 50% of credit
@@ -77,7 +103,7 @@ def _check_hard_exit(position: dict[str, Any]) -> tuple[bool, str]:
                 f"Profit target: spread value ${current_value:.0f} < "
                 f"{(1-config.PROFIT_TARGET_PCT)*100:.0f}% of credit (${credit_received:.0f})"
             )
-        # Stop loss: close if we'd lose more than 200% of credit
+        # Stop loss: close if buyback cost exceeds (1 + STOP_LOSS_PCT) of credit
         if current_value >= credit_received * (1 + config.STOP_LOSS_PCT):
             loss = current_value - credit_received
             return True, (
@@ -89,7 +115,7 @@ def _check_hard_exit(position: dict[str, Any]) -> tuple[bool, str]:
     # Entry price is positive (debit paid), current price is positive (spread value)
     # Profit: spread value increases → current_price > entry_price
     # Loss: spread value decreases → current_price < entry_price
-    if entry_price > 0:
+    elif entry_price > 0:
         debit_paid = entry_price * quantity * 100
         current_value = current_price * quantity * 100
         # Hard loss exit: close if loss > 100% of debit paid
@@ -136,6 +162,73 @@ def _get_current_price_for_contract(contract_symbol: str) -> float:
         return 0
 
 
+def _close_all_legs_for_fill(
+    pos: dict[str, Any],
+    leg_prices: dict[str, float] | None,
+) -> tuple[float, float, str, float]:
+    """
+    Close every leg at market and reconcile realized P&L from actual fills.
+
+    Returns (realized_pnl, exit_net_per_share, basis, slippage) where basis is
+    "fills" when every leg filled, else "mid_estimate" fallback.
+
+    Universal cashflow math (works for credit AND debit positions):
+        realized = Σ leg_close_cf − entry_cf
+    A buy-to-close leg is negative cashflow, a sell-to-close leg positive.
+    slippage = fill-based realized − mid-based estimate (negative = fills
+    were worse than the mids we decided on).
+    """
+    legs = pos.get("legs", [])
+    entry_price = pos.get("entry_price", 0)
+    quantity = pos.get("quantity", 1) or 1
+    entry_cf = entry_price * quantity * 100
+
+    total_close_cf = 0.0
+    all_filled = True
+    for leg in legs:
+        contract_sym = leg.get("symbol", "")
+        if not contract_sym:
+            all_filled = False
+            continue
+        try:
+            # Close all legs (not just buy legs) (fix #2)
+            fill_price = executor.close_position_and_poll(contract_sym)
+            leg_qty = leg.get("quantity", 1) or 1
+            if leg.get("side") == "sell":
+                total_close_cf -= fill_price * leg_qty * 100  # buy to close
+            else:
+                total_close_cf += fill_price * leg_qty * 100  # sell to close
+        except Exception as exc:
+            logger.error("Failed to close leg %s: %s", contract_sym, exc)
+            all_filled = False
+
+    # Mid-based estimate for comparison / fallback
+    mid_net: float | None = None
+    if leg_prices:
+        mid_net = _compute_net_position_value(pos, leg_prices)
+    if mid_net is None:
+        mid_net = pos.get("current_price", entry_price)
+    mid_pnl = round((mid_net - entry_price) * quantity * 100, 2)
+
+    if all_filled and legs:
+        fill_pnl = round(total_close_cf - entry_cf, 2)
+        exit_net = round(total_close_cf / (quantity * 100), 4)
+        slippage = round(fill_pnl - mid_pnl, 2)
+        logger.info(
+            "Position %s closed on fills: realized $%.2f (mid est $%.2f, slippage $%.2f)",
+            pos.get("id", ""), fill_pnl, mid_pnl, slippage,
+        )
+        return fill_pnl, exit_net, "fills", slippage
+
+    logger.warning(
+        "Position %s: %s — booking mid-estimate $%.2f instead of fills",
+        pos.get("id", ""),
+        "no legs to close" if not legs else "some legs did not fill",
+        mid_pnl,
+    )
+    return mid_pnl, round(mid_net, 4), "mid_estimate", 0.0
+
+
 def check_exits() -> list[dict[str, Any]]:
     """
     Check all open positions for exit conditions.
@@ -159,6 +252,15 @@ def check_exits() -> list[dict[str, Any]]:
             logger.warning("Position %s has no legs, skipping", position_id)
             continue
 
+        entry_price = pos.get("entry_price", 0)
+        quantity = pos.get("quantity", 1)
+
+        # DTE exit needs no quotes — evaluate it first so near-expiry
+        # positions are closed even when market data is unavailable.
+        dte_values = [_calculate_dte(leg.get("expiration", "")) for leg in legs]
+        min_dte = min(dte_values) if dte_values else 999
+        dte_breach = min_dte <= config.DTE_EXIT_THRESHOLD
+
         # Fetch current price for each leg
         leg_prices: dict[str, float] = {}
         for leg in legs:
@@ -168,26 +270,42 @@ def check_exits() -> list[dict[str, Any]]:
                 if price > 0:
                     leg_prices[contract_sym] = price
 
-        # Compute net position value from all legs
+        # Net value is None unless EVERY leg returned a quote. Never evaluate
+        # P&L exits on partial data — a missing expensive leg collapses the net
+        # toward 0 and triggers phantom "profit target" exits.
         net_value = _compute_net_position_value(pos, leg_prices)
-        pos["current_price"] = net_value
+        quotes_complete = net_value is not None
 
-        # Calculate unrealized P&L
-        entry_price = pos.get("entry_price", 0)
-        quantity = pos.get("quantity", 1)
-        # Debit spreads: entry_price > 0, profit = (current - entry) * qty * 100
-        # Credit spreads: entry_price < 0, profit = (entry - current) * qty * 100
-        if entry_price > 0:
+        if not quotes_complete and not dte_breach:
+            missing = [l.get("symbol", "?") for l in legs if l.get("symbol", "") not in leg_prices]
+            logger.warning(
+                "Position %s missing quotes for %d/%d legs %s — "
+                "skipping P&L exit evaluation (keeping last known values)",
+                position_id, len(missing), len(legs), missing,
+            )
+
+        if quotes_complete:
+            assert net_value is not None
+            pos["current_price"] = net_value
+
+            # Unified P&L: profit = (current net - entry net) * qty * 100.
+            # Correct for BOTH debit (entry > 0) and credit (entry < 0) spreads.
+            # The old credit branch had the operands flipped and booked every
+            # winner as a loss of exactly the credit received.
             pos["unrealized_pnl"] = round(
                 (net_value - entry_price) * quantity * 100, 2
             )
-        elif entry_price < 0:
-            pos["unrealized_pnl"] = round(
-                (entry_price - net_value) * quantity * 100, 2
-            )
 
         # Check hard exit rules
-        should_exit, reason = _check_hard_exit(pos)
+        if dte_breach:
+            should_exit, reason = True, (
+                f"DTE {min_dte} <= threshold {config.DTE_EXIT_THRESHOLD}"
+            )
+        elif quotes_complete:
+            should_exit, reason = _check_hard_exit(pos)
+        else:
+            should_exit, reason = False, ""
+
         if should_exit:
             logger.info(
                 "Hard exit triggered for %s: %s", position_id, reason
@@ -198,22 +316,21 @@ def check_exits() -> list[dict[str, Any]]:
                 if entry is None:
                     entry = state_manager.create_today_entry()
 
-                # Close all legs (not just buy legs) (fix #2)
-                for leg in legs:
-                    contract_sym = leg.get("symbol", "")
-                    if contract_sym:
-                        try:
-                            executor.close_position(contract_sym)
-                        except Exception as exc:
-                            logger.error("Failed to close leg %s: %s", contract_sym, exc)
+                # Close all legs (not just buy legs) (fix #2), polling for
+                # actual fills so realized P&L reflects reality, not mid quotes.
+                fill_pnl, exit_net, exit_basis, slippage = _close_all_legs_for_fill(
+                    pos, leg_prices if quotes_complete else None
+                )
 
                 # Record closed position
                 closed_positions.append({
                     **pos,
                     "exit_reason": reason,
                     "exit_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-                    "exit_price": net_value,
-                    "realized_pnl": pos.get("unrealized_pnl", 0),
+                    "exit_price": exit_net,
+                    "exit_basis": exit_basis,
+                    "exit_slippage": slippage,
+                    "realized_pnl": fill_pnl,
                 })
 
                 # Update daily log BEFORE removing position
@@ -221,11 +338,11 @@ def check_exits() -> list[dict[str, Any]]:
                     "symbol": underlying,
                     "strategy": pos.get("strategy", ""),
                     "entry_price": entry_price,
-                    "exit_price": net_value,
-                    "realized_pnl": pos.get("unrealized_pnl", 0),
-                    "reason": reason,
+                    "exit_price": exit_net,
+                    "realized_pnl": fill_pnl,
+                    "reason": f"{reason} [{exit_basis}]",
                 })
-                entry["realized_pnl"] += pos.get("unrealized_pnl", 0)
+                entry["realized_pnl"] += fill_pnl
                 state_manager.save_today_entry(entry)
 
                 # NOW remove from state
@@ -234,19 +351,18 @@ def check_exits() -> list[dict[str, Any]]:
             except Exception as exc:
                 logger.error("Failed to close position %s: %s", position_id, exc)
         else:
-            # Compute min DTE safely (fix #13)
-            dte_values = [_calculate_dte(leg.get("expiration", "")) for leg in legs]
-            min_dte = min(dte_values) if dte_values else 999
-
-            # Add to exit recommendations for LLM evaluation
+            # Add to exit recommendations for LLM evaluation.
+            # When quotes were incomplete, current_price/unrealized_pnl below
+            # are the last known values (NOT fresh marks).
             exit_recommendations.append({
                 "id": position_id,
                 "underlying": underlying,
                 "strategy": pos.get("strategy", ""),
                 "entry_price": entry_price,
-                "current_price": net_value,
+                "current_price": pos.get("current_price", entry_price),
                 "unrealized_pnl": pos.get("unrealized_pnl", 0),
                 "dte": min_dte,
+                "quotes_stale": not quotes_complete,
                 "llm_reasoning": pos.get("llm_reasoning", ""),
             })
 

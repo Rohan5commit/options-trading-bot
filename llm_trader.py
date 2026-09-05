@@ -400,109 +400,172 @@ def _truncate_context(ctx: dict[str, Any], max_chars: int = 12000) -> dict[str, 
 # ── Rule-based override (when LLM is too conservative) ────────────────────────
 
 
+def _leg_passes_liquidity(entry: dict[str, Any]) -> str | None:
+    """
+    Enforce the contract-level filters from config on an override candidate leg.
+    Returns a rejection reason, or None if the leg is tradable.
+    The old override ignored spread_pct / open_interest / dte entirely and sold
+    illiquid wide-market spreads, giving away the edge on entry fills.
+    """
+    if entry.get("mid", 0) <= 0:
+        return "no mid quote"
+    if entry.get("spread_pct", 999) > config.MAX_BID_ASK_SPREAD_PCT:
+        return f"bid-ask {entry.get('spread_pct', 0):.1%} > {config.MAX_BID_ASK_SPREAD_PCT:.0%} limit"
+    if entry.get("open_interest", 0) < config.MIN_OPEN_INTEREST:
+        return f"OI {entry.get('open_interest', 0)} < {config.MIN_OPEN_INTEREST} minimum"
+    dte = entry.get("dte", 0)
+    if dte < config.MIN_DTE or dte > config.MAX_DTE:
+        return f"DTE {dte} outside [{config.MIN_DTE}, {config.MAX_DTE}]"
+    return None
+
+
+def _build_override_leg(chain_entry: dict[str, Any], side: str) -> dict[str, Any]:
+    """Build an override leg carrying chain analytics for executor/risk sizing."""
+    return {
+        "type": chain_entry.get("type", "put"),
+        "strike": chain_entry.get("strike", 0),
+        "expiration": chain_entry.get("expiration", ""),
+        "quantity": 1,
+        "side": side,
+        "mid": chain_entry.get("mid", 0),
+        "bid": chain_entry.get("bid", 0),
+        "ask": chain_entry.get("ask", 0),
+        "spread_pct": chain_entry.get("spread_pct", 999),
+        "open_interest": chain_entry.get("open_interest", 0),
+        "dte": chain_entry.get("dte", 0),
+        "delta": chain_entry.get("delta", 0),
+    }
+
+
 def _rule_based_override(ctx: dict[str, Any]) -> dict[str, Any] | None:
     """
     Generate a trade when LLM says HOLD but conditions are favorable.
     Returns None if no override is needed.
-    Only generates CREDIT SPREADS (bull_put_spread, iron_condor) —
-    debit spreads are too risky for rule-based systems.
+    Generates ONLY bull_put_spread (credit): short an OTM put below support,
+    long a further-OTM put as defined-risk protection. Profits if the stock
+    stays ABOVE the short strike; max loss is capped at width minus credit.
     """
     global _trades_opened_today
     import state_manager
 
-    # ── Gate 1: Position limit ─────────────────────────────────────────────
+    # Gate 1: Position limit
     positions = state_manager.load_positions()
     if len(positions) >= config.MAX_OPEN_POSITIONS:
         return None
 
-    # ── Gate 2: Daily trade limit (in-memory counter — thread-safe) ────────
+    # Gate 2: Daily trade limit (in-memory counter — thread-safe)
     with _trades_lock:
         if _trades_opened_today >= config.MAX_DAILY_TRADES:
             return None
 
-    # ── Gate 3: Market regime filter ───────────────────────────────────────
-    # Check if SPY is in a strong downtrend — if so, don't trade
-    spy_rsi = ctx.get("underlying", {}).get("rsi_14", 50)
-    # If this IS SPY and RSI < 30, skip (strong downtrend)
-    if ctx.get("symbol") == "SPY" and spy_rsi < 30:
+    # Gate 3: Market regime filter.
+    # If this IS SPY and RSI < 30, skip (strong downtrend — falling knife).
+    underlying_data = ctx.get("underlying", {})
+    if ctx.get("symbol") == "SPY" and underlying_data.get("rsi_14", 50) < 30:
         return None
-    # For other symbols, check if we can access SPY context
-    # (we'll use the current symbol's RSI as a proxy since we don't have SPY data here)
 
     underlying = ctx.get("symbol", "")
-    price = ctx.get("underlying", {}).get("price", 0)
-    rsi = ctx.get("underlying", {}).get("rsi_14", 50)
+    price = underlying_data.get("price", 0)
+    rsi = underlying_data.get("rsi_14", 50)
     iv = ctx.get("iv_metrics", {}).get("current_iv", 0)
-    macd = ctx.get("underlying", {}).get("macd", {})
-    macd_hist = macd.get("histogram", 0)
-    calls = ctx.get("options_chain", {}).get("calls", [])
+    ma_20 = (underlying_data.get("bollinger") or {}).get("middle", 0)
     puts = ctx.get("options_chain", {}).get("puts", [])
 
-    if not calls or not puts or price == 0:
+    if not puts or price <= 0:
         return None
 
-    def find_closest_strike(options: list[dict], target: float, direction: str = "nearest") -> float | None:
-        """Find closest available strike to target. direction: 'up', 'down', or 'nearest'."""
-        strikes = sorted(set(o.get("strike", 0) for o in options if o.get("strike", 0) > 0))
-        if not strikes:
-            return None
-        if direction == "up":
-            candidates = [s for s in strikes if s >= target]
-        elif direction == "down":
-            candidates = [s for s in strikes if s <= target]
+    # Gate 4: Trend filter — sell puts only into healthy pullbacks.
+    # RSI < 40 while price holds above the 20-day MA = dip in an uptrend
+    # (high win-rate regime for short puts). RSI < 40 BELOW the MA = falling
+    # knife — the old code traded those and bled on max-loss gaps.
+    if config.REQUIRE_ABOVE_MA:
+        if ma_20 > 0:
+            if price <= ma_20:
+                logger.info(
+                    "Override skip for %s: price $%.2f below 20-day MA $%.2f",
+                    underlying, price, ma_20,
+                )
+                return None
         else:
-            candidates = strikes
-        if not candidates:
-            return None
-        return min(candidates, key=lambda s: abs(s - target))
+            logger.warning(
+                "Override for %s: no 20-day MA available, proceeding without trend gate",
+                underlying,
+            )
 
-    # Find ATM strikes
-    atm_put = min(puts, key=lambda p: abs(p.get("strike", 0) - price))
-    atm_call = min(calls, key=lambda c: abs(c.get("strike", 0) - price))
+    # Gate 5: Oversold + elevated IV.
+    # Only trade when RSI < 40 (pullback) and IV > 0.25 (premium worth selling).
+    if not (rsi < 40 and iv > 0.25):
+        return None
 
-    # ── Rule 1: Bull put spread (CREDIT) when oversold ────────────────────
-    # Profits if stock stays ABOVE the short strike
-    # Only trade when RSI < 40 (strongly oversold) and IV > 0.25
-    if rsi < 40 and iv > 0.25:
-        sell_strike = atm_put.get("strike", 0)
-        buy_strike = find_closest_strike(puts, sell_strike - 1, "down")
-        exp = atm_put.get("expiration", "")
-        if sell_strike > 0 and buy_strike and buy_strike < sell_strike and exp:
+    # Strike selection: OTM short put + defined-risk long put.
+    # Short strike must sit at least MIN_OTM_PCT below spot so normal noise
+    # doesn't test it; long leg is the nearest liquid strike below at the
+    # SAME expiration (tight width = small max loss). Both legs must pass
+    # liquidity filters. Nearest expiry first.
+    max_short_strike = price * (1 - config.MIN_OTM_PCT)
+    expirations = sorted({p.get("expiration", "") for p in puts if p.get("expiration")})
+
+    for exp in expirations:
+        exp_puts = [p for p in puts if p.get("expiration") == exp]
+        shorts = sorted(
+            (p for p in exp_puts
+             if 0 < p.get("strike", 0) <= max_short_strike),
+            key=lambda p: p["strike"],
+            reverse=True,
+        )
+        for short_entry in shorts:
+            reason = _leg_passes_liquidity(short_entry)
+            if reason is not None:
+                logger.debug("Override skip %s %s short leg: %s", underlying, exp, reason)
+                continue
+            # Delta gate on the short leg (when Greeks are available):
+            # target low-delta OTM shorts, not coin-flip ATM ones.
+            short_delta = abs(short_entry.get("delta") or 0)
+            if short_delta and not (config.SHORT_DELTA_MIN <= short_delta <= config.SHORT_DELTA_MAX):
+                logger.debug(
+                    "Override skip %s %s: short |delta| %.2f outside [%.2f, %.2f]",
+                    underlying, exp, short_delta,
+                    config.SHORT_DELTA_MIN, config.SHORT_DELTA_MAX,
+                )
+                continue
+            longs = sorted(
+                (p for p in exp_puts if 0 < p.get("strike", 0) < short_entry["strike"]),
+                key=lambda p: p["strike"],
+                reverse=True,
+            )
+            long_entry = None
+            for candidate in longs:
+                if _leg_passes_liquidity(candidate) is None:
+                    long_entry = candidate
+                    break
+            if long_entry is None:
+                continue
+
+            sell_strike = short_entry["strike"]
+            buy_strike = long_entry["strike"]
+            width = round(sell_strike - buy_strike, 2)
+            otm_pct = (price - sell_strike) / price * 100
             return {
                 "action": "BUY",
                 "strategy": "bull_put_spread",
                 "underlying": underlying,
                 "legs": [
-                    {"type": "put", "strike": sell_strike, "expiration": exp, "quantity": 1, "side": "sell"},
-                    {"type": "put", "strike": buy_strike, "expiration": exp, "quantity": 1, "side": "buy"},
+                    _build_override_leg(short_entry, "sell"),
+                    _build_override_leg(long_entry, "buy"),
                 ],
                 "confidence": 0.70,
-                "reasoning": f"Rule override: RSI {rsi:.1f} strongly oversold, IV {iv:.2f} supports credit selling",
+                "reasoning": (
+                    f"Rule override: RSI {rsi:.1f} pullback above 20MA ${ma_20:.2f}, "
+                    f"IV {iv:.2f}; short {sell_strike} put {otm_pct:.1f}% OTM "
+                    f"(|delta| {short_delta:.2f}) / long {buy_strike} put, "
+                    f"width ${width:.2f}, {exp}"
+                ),
             }
 
-    # ── Rule 2: Iron condor (CREDIT) when high IV + neutral ───────────────
-    # Profits if stock stays in a range
-    if iv > 0.35 and 40 < rsi < 60:
-        call_sell = find_closest_strike(calls, price * 1.03, "up")
-        call_buy = find_closest_strike(calls, price * 1.06, "up") if call_sell else None
-        put_sell = find_closest_strike(puts, price * 0.97, "down")
-        put_buy = find_closest_strike(puts, price * 0.94, "down") if put_sell else None
-        exp = atm_call.get("expiration", "")
-        if all([call_sell, call_buy, put_sell, put_buy, exp]) and call_buy > call_sell and put_buy < put_sell:
-            return {
-                "action": "BUY",
-                "strategy": "iron_condor",
-                "underlying": underlying,
-                "legs": [
-                    {"type": "call", "strike": call_sell, "expiration": exp, "quantity": 1, "side": "sell"},
-                    {"type": "call", "strike": call_buy, "expiration": exp, "quantity": 1, "side": "buy"},
-                    {"type": "put", "strike": put_sell, "expiration": exp, "quantity": 1, "side": "sell"},
-                    {"type": "put", "strike": put_buy, "expiration": exp, "quantity": 1, "side": "buy"},
-                ],
-                "confidence": 0.70,
-                "reasoning": f"Rule override: IV {iv:.2f} high, neutral RSI {rsi:.1f}, range-bound expected",
-            }
-
+    logger.info(
+        "Override skip for %s: no liquid OTM put spread found (RSI %.1f, IV %.2f)",
+        underlying, rsi, iv,
+    )
     return None
 
 
