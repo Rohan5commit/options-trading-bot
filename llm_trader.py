@@ -594,7 +594,16 @@ def _process_symbol(
                 user_prompt += f"\n\nExisting open positions to evaluate for exit:\n{json.dumps(open_pos, indent=2)}"
 
         logger.info("Calling LLM for %s", symbol)
-        raw_response = modal_inference.call_inference(user_prompt, SYSTEM_PROMPT)
+        try:
+            raw_response = modal_inference.call_inference(user_prompt, SYSTEM_PROMPT)
+        except Exception as exc:
+            # Single-container mode: one transient crash can strand the whole run.
+            # One retry lets Modal respawn the container; second failure falls
+            # through to the outer handler (symbol skipped, run continues).
+            logger.warning("LLM call failed for %s on first attempt (%s) — retrying", symbol, exc)
+            import time as _retry_time
+            _retry_time.sleep(5)
+            raw_response = modal_inference.call_inference(user_prompt, SYSTEM_PROMPT)
 
         # Parse the response (with freeform fallback)
         decision = _extract_json(raw_response)

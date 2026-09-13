@@ -33,7 +33,8 @@ inference_image = (
 @app.cls(
     image=inference_image,
     gpu="L4",
-    scaledown_window=300,
+    max_containers=1,
+    scaledown_window=60,
     timeout=180,
     secrets=[modal.Secret.from_name("huggingface-token")],
 )
@@ -119,7 +120,7 @@ class OptionsLLM:
         with torch.inference_mode():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=512,
+                max_new_tokens=320,
                 temperature=0.2,  # Lower for more consistent outputs
                 top_p=0.9,
                 do_sample=True,
